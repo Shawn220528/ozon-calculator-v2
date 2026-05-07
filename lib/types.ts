@@ -21,7 +21,7 @@ export interface ShippingChannel {
   serviceLevel: string;            // 服务等级 (Economy, Express, Standard, etc.)
   fixFee: number;                  // 固定费 (RMB)
   varFeePerGram: number;           // 每克变动费 (RMB/g)
-  pricePerKg: number;              // 每公斤价格 (RMB) = fixFee + varFeePerGram * 1000 (兼容)
+  pricePerKg: number;              // 每公斤参考价 (RMB) = fixFee + varFeePerGram * 1000 (⚠️ 仅供参考，实际运费由 fixFee + varFeePerGram * 计费重 计算)
   pricePerCubic: number;           // 每立方价格 (RMB)
   minWeight: number;               // 最小重量限制 (g)
   maxWeight: number;               // 最大重量限制 (g)
@@ -91,7 +91,7 @@ export interface CalculationInput {
   promotionDiscount: number; // 百分比
   
   // 全局设置
-  exchangeRate: number; // RMB/RUB (1 RUB = X RMB)
+  exchangeRate: number; // 汇率：1 CNY = X RUB (例如 12.0，即1元人民币兑换12卢布)
   withdrawalFee: number; // 百分比
   exchangeRateBuffer: number; // 汇率安全缓冲百分比（默认0，用于规避结汇风险）
   
@@ -101,7 +101,7 @@ export interface CalculationInput {
   profitWarningThreshold?: number | null; // 利润率预警阈值
   multiItemCount: number; // 单单购买数量，默认1
   
-  // 税务设置
+  // 税务设置（⚠️ 暂未实现计算逻辑，仅预留字段）
   taxEnabled: boolean; // 是否开启税务核算
   vatRate: number; // 增值税率 (%)
   corporateTaxRate: number; // 企业所得税率 (%)

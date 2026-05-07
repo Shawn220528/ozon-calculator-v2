@@ -31,6 +31,7 @@ import {
   getChargeableWeight,
   reversePriceFromMargin,
   calculateSixTierPricing,
+  calculateSuggestedPrice,
 } from "@/lib/calculator";
 import { calculateShippingCost, parseBillingWeight, getBillingModeDescription } from "@/lib/data-hub-context";
 import { PreviewMappingDialog } from "@/components/preview-mapping-dialog";
@@ -261,8 +262,30 @@ export default function Home() {
   // 🔹 致命错误诊断面板显
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   
+  // 🔹 ESC 键关闭诊断面板
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showDiagnostic) {
+        setShowDiagnostic(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showDiagnostic]);
+  
   // 🔹 渠道收藏夹
   const [favoriteChannels, setFavoriteChannels] = useState<string[]>([]);
+  
+  // 🔹 上传成功提示状态
+  const [uploadToast, setUploadToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  
+  // 🔹 上传提示自动消失
+  useEffect(() => {
+    if (uploadToast) {
+      const timer = setTimeout(() => setUploadToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [uploadToast]);
   
   // 加载收藏夹
   useEffect(() => {
@@ -283,6 +306,18 @@ export default function Home() {
     setIsFetchingRate(true);
     setRateFetchError(null);
     try {
+      // 🔴 缓存：5分钟内不重复请求
+      const cacheKey = "ozon_exchange_rate_cache";
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const { rate, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp < 5 * 60 * 1000 && rate > 0) {
+          setInput(prev => ({ ...prev, exchangeRate: parseFloat(rate.toFixed(4)) }));
+          setIsFetchingRate(false);
+          return;
+        }
+      }
+      
       const response = await fetch('https://open.er-api.com/v6/latest/RUB');
       if (!response.ok) throw new Error('汇率API请求失败');
       const data = await response.json();
@@ -290,6 +325,8 @@ export default function Home() {
         // API返回: 1 RUB = X CNY, 需要转为: 1 CNY = X RUB
         const rateRUBperCNY = 1 / parseFloat(data.rates.CNY.toFixed(6));
         setInput(prev => ({ ...prev, exchangeRate: parseFloat(rateRUBperCNY.toFixed(4)) }));
+        // 缓存汇率
+        localStorage.setItem(cacheKey, JSON.stringify({ rate: rateRUBperCNY, timestamp: Date.now() }));
       }
     } catch (error) {
       console.error('获取汇率失败:', error);
@@ -374,9 +411,12 @@ export default function Home() {
   const effectiveExchangeRate = useMemo(() => {
     // 用户输入表示: 1 CNY = X RUB
     // 转换为程序内部表示: 1 RUB = (1/X) RMB
-    const rateCNYperRUB = input.exchangeRate;
-    return rateCNYperRUB > 0 ? 1 / rateCNYperRUB : 0.082;
-  }, [input.exchangeRate]);
+    // 🔴 修复：启用汇率安全缓冲时，实际汇率应更低（规避结汇风险）
+    // buffer > 0 时，实际汇率 = 原汇率 × (1 - buffer/100)
+    const bufferMultiplier = 1 - (input.exchangeRateBuffer || 0) / 100;
+    const adjustedRate = input.exchangeRate * Math.max(bufferMultiplier, 0.5); // 最低保护50%
+    return adjustedRate > 0 ? 1 / adjustedRate : 0.082;
+  }, [input.exchangeRate, input.exchangeRateBuffer]);
 
   // 获取可用物流渠道 — 需要将 RMB 转为 RUB 传入（使用实际汇率）
   const selectedProviders = input.designatedProviders || [];
@@ -412,6 +452,16 @@ export default function Home() {
     }
     return baseShippingChannels;
   }, [baseShippingChannels, isFavoritesFilter, favoriteChannels, shippingData]);
+
+  // 🔹 智能售价建议：当无可用渠道且未填售价时，分析可修复渠道
+  const priceSuggestion = useMemo(() => {
+    // 仅在无可用渠道、未填售价、且有尺寸重量数据时计算
+    if (shippingChannels.available.length > 0 || input.targetPriceRMB > 0 || input.weight <= 0) {
+      return null;
+    }
+    // 使用 input.exchangeRate (1 CNY = X RUB) 作为 RMB→RUB 转换因子
+    return calculateSuggestedPrice(shippingChannels.unavailable, input.exchangeRate);
+  }, [shippingChannels, input.targetPriceRMB, input.weight, input.exchangeRate]);
 
   // 🔹 推荐物流排序：按费用/时效/评分排序（定义在 channelCosts 之后，见下方）
 
@@ -687,8 +737,10 @@ export default function Home() {
       // 回退到直接加载
       try {
         await loadCommissionData(file, "overwrite");
+        setUploadToast({ message: `✅ 佣金表 "${file.name}" 导入成功！`, type: 'success' });
       } catch (loadErr) {
         console.error("上传佣金表失败:", loadErr);
+        setUploadToast({ message: `❌ 佣金表导入失败: ${loadErr instanceof Error ? loadErr.message : '未知错误'}`, type: 'error' });
       }
     }
   }, [loadCommissionData]);
@@ -712,8 +764,10 @@ export default function Home() {
       // 回退到直接加载
       try {
         await loadShippingData(file, "overwrite");
+        setUploadToast({ message: `✅ 物流表 "${file.name}" 导入成功！`, type: 'success' });
       } catch (loadErr) {
         console.error("上传物流表失败:", loadErr);
+        setUploadToast({ message: `❌ 物流表导入失败: ${loadErr instanceof Error ? loadErr.message : '未知错误'}`, type: 'error' });
       }
     }
   }, [loadShippingData]);
@@ -726,8 +780,10 @@ export default function Home() {
       try {
         if (mappingDataType === "commission") {
           await loadCommissionData(pendingMappingFile, "overwrite");
+          setUploadToast({ message: `✅ 佣金表导入成功！`, type: 'success' });
         } else {
           await loadShippingData(pendingMappingFile, "overwrite");
+          setUploadToast({ message: `✅ 物流表导入成功！`, type: 'success' });
           
           // 🔹 物流表：提取拦截配置并保存
           const config: Record<string, boolean> = {};
@@ -755,13 +811,18 @@ export default function Home() {
   }, []);
 
   // 计算卢布售价
-  const priceRUB = input.exchangeRate > 0 ? input.targetPriceRMB / input.exchangeRate : 0;
+  // 🔴 修复：exchangeRate = 1 CNY 对应的 RUB 数量，RMB → RUB 应使用乘法
+  const priceRUB = input.exchangeRate > 0 ? input.targetPriceRMB * input.exchangeRate : 0;
 
-  // 🔹 预计算所有渠道运费（使用体积重计算）
+  // 🔹 预计算渠道运费（仅可用渠道，不可用渠道按需计算）
   const channelCosts = useMemo(() => {
     const map = new Map<string, number>();
-    for (const ch of [...shippingChannels.available, ...shippingChannels.unavailable]) {
-      // 传入尺寸和实际重量，让 calculateShippingCost 自动计算体积重
+    // 🔴 优化：仅计算可用渠道的运费，不可用渠道不参与核心计算
+    for (const ch of shippingChannels.available) {
+      map.set(ch.id, calculateShippingCost(ch, input.weight, input.length, input.width, input.height, input.weight));
+    }
+    // 不可用渠道也计算（用于显示参考价格），但延迟到需要时
+    for (const ch of shippingChannels.unavailable.slice(0, 20)) {
       map.set(ch.id, calculateShippingCost(ch, input.weight, input.length, input.width, input.height, input.weight));
     }
     return map;
@@ -829,7 +890,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* 🔹 顶部控制台 - 极致扁平化 */}
-      <header className="sticky top-0 z-50 w-full bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm h-12">
+      <header className="sticky top-0 z-[100] w-full bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm h-12">
         {/* 外部容器 */}
         <div className="w-full px-4 relative flex items-center justify-between h-full">
           {/* 左侧：品牌标题 */}
@@ -837,8 +898,8 @@ export default function Home() {
             <span className="text-xs font-bold text-slate-600">🎯 精算</span>
           </div>
           
-          {/* 中间：5个核心指标 - 绝对居中 - 醒目强化 */}
-          <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-4 whitespace-nowrap">
+          {/* 中间：5个核心指标 - 绝对居中 - 醒目强化 - 小屏隐藏 */}
+          <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 items-center gap-4 whitespace-nowrap">
             {/* 净利 - 核心盈亏指标 */}
             <div className="flex flex-col items-center px-3 py-1 rounded-lg bg-white shadow-sm border">
               <span className={`text-lg font-bold tabular-nums ${result.netProfit >= 0 ? "text-[#059669]" : "text-[#DC2626]"}`}>
@@ -897,12 +958,12 @@ export default function Home() {
                 <label className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 cursor-pointer">
                   <Upload className="h-3 w-3 text-blue-600" />
                   <span>导入佣金表</span>
-                  <input type="file" accept=".csv" className="hidden" onChange={handleCommissionFileUpload} />
+                  <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleCommissionFileUpload} />
                 </label>
                 <label className="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 cursor-pointer">
                   <Truck className="h-3 w-3 text-green-600" />
                   <span>导入物流表</span>
-                  <input type="file" accept=".csv" className="hidden" onChange={handleShippingFileUpload} />
+                  <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleShippingFileUpload} />
                 </label>
                 <div className="px-3 py-2 border-t border-b text-xs font-medium text-slate-600">模板</div>
                 <button onClick={() => downloadTemplate("commission")} className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50">佣金表模板</button>
@@ -1004,10 +1065,22 @@ export default function Home() {
         </div>
       </header>
       
+      {/* 🔹 上传成功/失败提示 - 浮动Toast */}
+      {uploadToast && (
+        <div className={`fixed top-14 right-4 z-[100] px-4 py-3 rounded-lg shadow-xl border-2 text-sm font-medium transition-all animate-slide-in ${
+          uploadToast.type === 'success' 
+            ? 'bg-emerald-50 text-emerald-800 border-emerald-300' 
+            : 'bg-red-50 text-red-800 border-red-300'
+        }`}>
+          {uploadToast.message}
+          <button onClick={() => setUploadToast(null)} className="ml-2 opacity-50 hover:opacity-100">✕</button>
+        </div>
+      )}
+      
       {/* 🔹 全局诊断通栏 - 横跨全屏，自适应滚动，去重渲染 */}
       <div 
         id="global-diagnostic-bar"
-        className="relative z-[60] w-full flex flex-wrap justify-center items-center gap-2 px-4 py-2 bg-gradient-to-r from-slate-50 via-amber-50 to-slate-50 border-b border-amber-200"
+        className="w-full flex flex-wrap justify-center items-center gap-2 px-4 py-2 bg-gradient-to-r from-slate-50 via-amber-50 to-slate-50 border-b border-amber-200"
         style={{ 
           minHeight: '40px',
           maxHeight: '100px',
@@ -1029,14 +1102,22 @@ export default function Home() {
             {showDiagnostic && (
               <>
                 <div 
-                  className="fixed inset-0 z-[99998] bg-black/30" 
+                  className="fixed inset-0 z-[70] bg-black/30" 
                   onClick={() => setShowDiagnostic(false)}
                 />
                 <div 
-                  className="fixed z-[99999] p-4 bg-white text-slate-700 rounded-lg shadow-2xl border-2 border-red-200 text-xs whitespace-nowrap min-w-[320px] max-h-[450px] overflow-y-auto"
+                  className="fixed z-[75] p-4 bg-white text-slate-700 rounded-lg shadow-2xl border-2 border-red-200 text-xs whitespace-nowrap min-w-[320px] max-h-[450px] overflow-y-auto"
                   style={{ left: '50%', top: '100px', transform: 'translateX(-50%)' }}
                 >
-                <div className="font-bold text-red-600 mb-2">🔍 问题诊断与解决方案</div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-bold text-red-600">🔍 问题诊断与解决方案</div>
+                  <button 
+                    onClick={() => setShowDiagnostic(false)}
+                    className="px-2 py-0.5 text-xs text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded"
+                  >
+                    ✕ 关闭
+                  </button>
+                </div>
                 
                 {/* 检查输入是否完整 */}
                 <div className="mb-3 bg-slate-50 p-2 rounded">
@@ -1096,36 +1177,41 @@ export default function Home() {
                   )}
                   
                   {/* 如果填写了尺寸重量��没有售价 - 显示价格建议 */}
-                  {input.length > 0 && input.width > 0 && input.height > 0 && input.weight > 0 && input.targetPriceRMB <= 0 && shippingChannels.unavailable.length > 0 && (
-                    <div className="bg-amber-50 p-2 rounded mb-2">
-                      <div className="text-amber-700 font-medium mb-1">💰 填写售价可获得物流匹配</div>
-                      {(() => {
-                        // 找出价格限制
-                        const valueBlocked = shippingChannels.unavailable.find(ch => ch.minValueRUB || ch.maxValueRUB);
-                        if (valueBlocked) {
-                          const minRUB = valueBlocked.minValueRUB || 0;
-                          const maxRUB = valueBlocked.maxValueRUB || 0;
-                          const minRMB = minRUB / input.exchangeRate;
-                          const maxRMB = maxRUB ? maxRUB / input.exchangeRate : null;
-                          return (
-                            <div className="text-slate-600 text-[10px] space-y-1">
-                              <div>建议售价区间：</div>
-                              {minRMB > 0 && <div>¥{Math.round(minRMB)} ~ </div>}
-                              {maxRMB ? (
-                                <div>¥{Math.round(maxRMB)} (约{Math.round(maxRUB).toLocaleString()}₽)</div>
-                              ) : minRMB > 0 ? (
-                                <div>¥{Math.round(minRMB)}以上</div>
-                              ) : null}
-                              <div className="text-[9px] text-slate-400">
-                                (渠道: {valueBlocked.name})
-                              </div>
+                  {/* 🔴 智能售价建议：区分可修复/不可修复渠道 */}
+                  {input.length > 0 && input.width > 0 && input.height > 0 && input.weight > 0 && input.targetPriceRMB <= 0 && shippingChannels.unavailable.length > 0 && (() => {
+                    const suggestion = calculateSuggestedPrice(shippingChannels.unavailable, input.exchangeRate);
+                    if (suggestion.fixableChannels.length > 0) {
+                      return (
+                        <div className="bg-amber-50 p-2 rounded mb-2">
+                          <div className="text-amber-700 font-medium mb-1">💰 调整售价可匹配以下渠道：</div>
+                          {suggestion.fixableChannels.slice(0, 5).map((opt, idx) => (
+                            <div key={idx} className="flex justify-between items-center text-[10px] mb-1">
+                              <span className="text-slate-600">{opt.channelName}</span>
+                              <span className="font-semibold text-amber-700">
+                                ≥ ¥{Math.ceil(opt.minPriceRMB)} (≈{Math.round(opt.minValueRUB).toLocaleString()}₽)
+                              </span>
                             </div>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </div>
-                  )}
+                          ))}
+                          {suggestion.unfixableChannelCount > 0 && (
+                            <div className="text-orange-600 text-[10px] mt-1 border-t border-amber-200 pt-1">
+                              ⚠️ 另有 {suggestion.unfixableChannelCount} 个渠道因尺寸/重量/属性无法匹配，调价无法解决
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    if (suggestion.cannotFixByPrice) {
+                      return (
+                        <div className="bg-red-50 p-2 rounded mb-2">
+                          <div className="text-red-700 font-medium">⚠️ 调价无法解决</div>
+                          <div className="text-red-600 text-[10px]">
+                            所有渠道均因尺寸/重量/属性等原因无法匹配，仅调整售价无法解决。
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                   
                   {/* 如果尺寸重量售价都填了但还是没有渠道 - 显示具体原因 */}
                   {input.length > 0 && input.width > 0 && input.height > 0 && input.weight > 0 && input.targetPriceRMB > 0 && shippingChannels.unavailable.length > 0 && (
@@ -1160,6 +1246,35 @@ export default function Home() {
               </div>
               </>
             )}
+          </div>
+        )}
+        
+        {/* 💡 智能售价建议横幅 - 无渠道+未填售价时显示 */}
+        {priceSuggestion && priceSuggestion.suggestedPriceRMB > 0 && (
+          <div className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-full text-base font-bold bg-amber-100 text-amber-800 border-2 border-amber-400 shadow-lg">
+            <span>💡</span>
+            <span>建议售价 <strong>¥{Math.ceil(priceSuggestion.suggestedPriceRMB)}</strong> 
+              (≈{Math.round(priceSuggestion.suggestedPriceRUB).toLocaleString()}₽) 
+              可匹配「{priceSuggestion.channelName}」</span>
+            <button 
+              onClick={() => setInput(prev => ({ ...prev, targetPriceRMB: Math.ceil(priceSuggestion.suggestedPriceRMB) }))}
+              className="ml-1 px-2 py-0.5 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-bold"
+            >
+              填入
+            </button>
+            {priceSuggestion.unfixableChannelCount > 0 && (
+              <span className="text-[10px] text-amber-600 ml-1">
+                (另有{priceSuggestion.unfixableChannelCount}个渠道调价无法修复)
+              </span>
+            )}
+          </div>
+        )}
+        
+        {/* 💡 调价无法解决横幅 */}
+        {priceSuggestion && priceSuggestion.cannotFixByPrice && (
+          <div className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold bg-red-100 text-red-800 border-2 border-red-400 shadow-lg">
+            <span>⚠️</span>
+            <span>所有渠道因尺寸/重量/属性拦截，调价无法解决</span>
           </div>
         )}
         
@@ -1304,10 +1419,10 @@ export default function Home() {
       
       {/* 🔹 主内容区 - 三栏布局 */}
       <main className="flex-1 container mx-auto px-4 py-3">
-        <div className="grid grid-cols-12 gap-3 h-[calc(100vh-5rem)]">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 h-[calc(100vh-5rem)]">
           {/* 左侧输入区 col-span-3 ≈ 25% */}
           {/* 🔹 重构：Flex 纵向锁定 - 父容器撑满高度，内部独立滚动 */}
-          <div className="col-span-3 flex flex-col h-full">
+          <div className="md:col-span-3 col-span-1 flex flex-col h-full">
             {/* 🔹 上部：参数输入区 - 独立滚动区域 */}
             <div className="flex-1 overflow-y-auto scrollbar-thin pb-3">
               <InputPanel
@@ -1323,12 +1438,13 @@ export default function Home() {
                 selectedBillingInfo={selectedBillingInfo}
                 lockedMargin={lockedMargin}
                 onToggleMarginLock={handleToggleMarginLock}
+                suggestedPriceInfo={priceSuggestion}
               />
             </div>
           </div>
 
           {/* 中间财务看板 col-span-5 ≈ 42% */}
-          <div className="col-span-5 overflow-y-auto scrollbar-thin">
+          <div className="md:col-span-5 col-span-1 overflow-y-auto scrollbar-thin">
             <Dashboard
               result={result}
               input={input}
@@ -1350,7 +1466,7 @@ export default function Home() {
           </div>
 
           {/* 右侧物流列表 col-span-4 ≈ 33% */}
-          <div className="col-span-4 flex flex-col gap-3 h-[calc(100vh-5rem)] overflow-hidden">
+          <div className="md:col-span-4 col-span-1 flex flex-col gap-3 h-[calc(100vh-5rem)] overflow-hidden">
             {/* 物流筛选区 */}
             <div className="bg-card rounded-lg border p-3">
               <div className="flex items-center justify-between mb-2">

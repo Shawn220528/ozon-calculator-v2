@@ -51,7 +51,7 @@ interface DataHubContextType {
     hasBattery?: boolean,
     hasLiquid?: boolean,
     designatedProvider?: string
-  ) => { available: ShippingChannel[]; unavailable: (ShippingChannel & { reason: string })[] };
+  ) => { available: ShippingChannel[]; unavailable: UnavailableShippingChannel[] };
 }
 
 const DataHubContext = createContext<DataHubContextType | undefined>(undefined);
@@ -60,8 +60,48 @@ const DataHubContext = createContext<DataHubContextType | undefined>(undefined);
 // 工具函数
 // ========================================================
 
+/**
+ * 安全写入 localStorage（含容量保护）
+ * 当数据过大或写入失败时，自动降级处理
+ */
+function safeLocalStorageSet(key: string, value: string): { success: boolean; error?: string } {
+  try {
+    // 预检：估算数据大小（5MB 为安全上限）
+    const sizeKB = new Blob([value]).size / 1024;
+    if (sizeKB > 4500) {
+      console.warn(`[localStorage保护] 数据过大 (${sizeKB.toFixed(0)}KB)，跳过持久化: ${key}`);
+      return { success: false, error: `数据过大 (${sizeKB.toFixed(0)}KB)` };
+    }
+    localStorage.setItem(key, value);
+    return { success: true };
+  } catch (e) {
+    // QuotaExceededError
+    console.warn(`[localStorage保护] 写入失败: ${key}`, e);
+    // 尝试清除旧数据重试
+    try {
+      localStorage.removeItem(key);
+      localStorage.setItem(key, value);
+      return { success: true };
+    } catch {
+      return { success: false, error: '存储空间不足' };
+    }
+  }
+}
+
 function parsePercentString(val: string): number {
   return parseFloat(val.replace("%", "").replace(",", ".").trim());
+}
+
+/**
+ * 欧式数字清洗器
+ * 处理俄罗斯/欧洲导出表格中的千分位空格和逗号小数点
+ * 如: "30,000" → 30000, "30 000" → 30000, "30.5" → 30.5
+ */
+function parseEuropeanNumber(val: string | number | null | undefined): number {
+  if (val === null || val === undefined || val === '' || val === '-') return 0;
+  const cleanVal = String(val).replace(/\s/g, '').replace(',', '.');
+  const num = parseFloat(cleanVal.replace(/[^\d.-]/g, ''));
+  return isNaN(num) ? 0 : num;
 }
 
 /**
@@ -213,8 +253,11 @@ function parseShippingRateString(rateStr: string): { fixFee: number; varFeePerGr
 
   try {
     // 步骤1: 预处理 - 统一格式
+    // 🔴 修复：先移除千分位逗号（",000" → "000"），再将欧洲小数点逗号转点号
+    // 原逻辑 .replace(/,/g, ".") 会把 "30,000" 误转为 "30.000"
     let cleaned = rateStr
-      .replace(/,/g, ".")                                    // 逗号转点号
+      .replace(/(\d),(\d{3})/g, '$1$2')    // 移除千分位逗号: 30,000 → 30000
+      .replace(/,/g, ".")                    // 欧洲小数点: 0,5 → 0.5
       .replace(/[¥￥$€₽]/gi, "")                             // 移除所有货币符号
       .replace(/rmb|cny|rub|rubles?|元|卢布/gi, "")           // 移除货币单位
       .replace(/人民币|固定费|变动费|价格|费用|成本/gi, "")      // 移除中文注释
@@ -359,6 +402,63 @@ function parseValueRange(valStr: string): { min: number; max: number } {
 }
 
 /**
+ * 从行数据解析体积重除数
+ * 支持多种格式：纯数字、"÷12000"、"/12000"、带空格的 "12 000" 等
+ */
+function parseVolumetricDivisorFromRow(rawValue: string, billingType: string): number {
+  if (!rawValue || rawValue.trim() === "" || rawValue.trim() === "-") {
+    return parseVolumetricDivisorFromBillingType(billingType);
+  }
+  
+  // 移除千分位空格和逗号
+  const cleaned = String(rawValue).replace(/[\s,]/g, "");
+  const parsed = parseInt(cleaned);
+  
+  if (parsed >= 1000 && parsed <= 20000) return parsed;
+  
+  // 尝试从字符串中提取除数模式
+  const match = cleaned.match(/[÷/](\d+)/);
+  if (match) {
+    const d = parseInt(match[1]);
+    if (d >= 1000 && d <= 20000) return d;
+  }
+  
+  // 回退到 billingType 解析
+  return parseVolumetricDivisorFromBillingType(billingType);
+}
+
+/**
+ * 从计费类型字符串解析体积重除数
+ * 纯实际重量 → 0（不计抛），取大/体积 → 默认 12000
+ */
+function parseVolumetricDivisorFromBillingType(billingType: string): number {
+  const normalized = (billingType || "").toLowerCase();
+  
+  // 纯实际重量：不计抛
+  if (normalized.includes("实际") && !normalized.includes("最大") && !normalized.includes("取大") && !normalized.includes("max")) {
+    return 0;
+  }
+  
+  // 从 billingType 中提取除数
+  const patterns = [/÷(\d+)/, /\/(\d+)/];
+  for (const pattern of patterns) {
+    const match = normalized.replace(/[\s,]/g, "").match(pattern);
+    if (match) {
+      const d = parseInt(match[1]);
+      if (d >= 1000 && d <= 20000) return d;
+    }
+  }
+  
+  // 取大/体积/默认 → 12000
+  if (normalized.includes("取大") || normalized.includes("最大") || normalized.includes("max") || normalized.includes("体积")) {
+    return 12000;
+  }
+  
+  // 默认 12000（Ozon 标准系数）
+  return 12000;
+}
+
+/**
  * 生成物流渠道唯一标识符
  * 格式: [配送方式名称]_[服务等级]
  * 用于数据覆盖和去重
@@ -426,8 +526,8 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
   }, []);
   useEffect(() => {
     try {
-      // 🔹 数据版本控制：清除旧版本数据
-      const DATA_VERSION = "v2.2"; // 强制清除旧数据，修复阶梯匹配问题
+      // 🔹 数据版本控制：兼容迁移而非暴力清除
+      const DATA_VERSION = "v2.3"; // 兼容升级，修复体积重除数和欧式数字解析
       const savedVersion = localStorage.getItem("ozon_data_version");
       
       // 🔹 先读取所有数据，避免作用域问题
@@ -436,10 +536,17 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
       const savedMapping = localStorage.getItem("ozon_column_mapping");
       
       if (savedVersion !== DATA_VERSION) {
-        localStorage.removeItem("ozon_commission_data");
-        localStorage.removeItem("ozon_shipping_data");
-        localStorage.removeItem("ozon_column_mapping");
-        localStorage.setItem("ozon_data_version", DATA_VERSION);
+        // 🔴 修复：版本升级时不再暴力清除，而是保留用户数据
+        // 仅在数据格式完全不兼容时才清除（如 v1.x → v2.x）
+        const isMajorUpgrade = savedVersion && !savedVersion.startsWith("v2");
+        
+        if (isMajorUpgrade) {
+          localStorage.removeItem("ozon_commission_data");
+          localStorage.removeItem("ozon_shipping_data");
+          localStorage.removeItem("ozon_column_mapping");
+        }
+        // 更新版本号
+        safeLocalStorageSet("ozon_data_version", DATA_VERSION);
       } else {
         if (savedCommission) {
           const parsed = JSON.parse(savedCommission);
@@ -478,7 +585,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
                 item.volumetricDivisor !== parsed[i].volumetricDivisor
               );
               if (hasFixed) {
-                localStorage.setItem("ozon_shipping_data", JSON.stringify(fixedParsed));
+                safeLocalStorageSet("ozon_shipping_data", JSON.stringify(fixedParsed));
               }
             }
           }
@@ -562,7 +669,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               const parsed = parseRows(rawRows);
               setCommissionData(parsed);
               setCommissionLoaded(true);
-              localStorage.setItem("ozon_commission_data", JSON.stringify(parsed));
+              safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
               resolve();
             } catch (e) {
               reject(e);
@@ -582,7 +689,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             const parsed = parseRows(rawRows);
             setCommissionData(parsed);
             setCommissionLoaded(true);
-            localStorage.setItem("ozon_commission_data", JSON.stringify(parsed));
+            safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
             resolve();
           } catch (err) {
             reject(err);
@@ -676,16 +783,19 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             const valRUB = parseValueRange(valRUBStr);
             const valRMB = parseValueRange(valRMBStr);
 
-            const minW = fieldMapping.minWeight >= 0 ? parseFloat(row[fieldMapping.minWeight]) || 0 : 0;
-            const maxW = fieldMapping.maxWeight >= 0 ? parseFloat(row[fieldMapping.maxWeight]) || 999999 : 999999;
+            // 🔴 修复：使用 parseEuropeanNumber 替代 parseFloat，正确处理 "30,000" 和 "30 000" 等格式
+            const minW = fieldMapping.minWeight >= 0 ? parseEuropeanNumber(row[fieldMapping.minWeight]) || 0 : 0;
+            const maxW = fieldMapping.maxWeight >= 0 ? parseEuropeanNumber(row[fieldMapping.maxWeight]) || 999999 : 999999;
 
             const batteryAllowed = fieldMapping.battery >= 0 ? row[fieldMapping.battery]?.includes("允许") || row[fieldMapping.battery]?.toLowerCase().includes("allow") || row[fieldMapping.battery]?.includes("Разрешено") : false;
             const liquidAllowed = fieldMapping.liquid >= 0 ? row[fieldMapping.liquid]?.includes("允许") || row[fieldMapping.liquid]?.toLowerCase().includes("allow") || row[fieldMapping.liquid]?.includes("Разрешено") : false;
 
             const billingType = fieldMapping.billingType >= 0 ? row[fieldMapping.billingType]?.trim() || "实际重量" : "实际重量";
 
-            // 体积重除数硬编码为 12000（Ozon 标准系数）
-            const volDivisor = 12000;
+            // 🔴 修复：从 billingType 或 volumetricDivisor 列解析实际除数，而非硬编码 12000
+            // Budget 等不计抛渠道除数为 0，若硬编码会导致误计抛
+            const rawVolDivisor = fieldMapping.volumetricDivisor >= 0 ? row[fieldMapping.volumetricDivisor] || "" : "";
+            const volDivisor = rawVolDivisor ? parseVolumetricDivisorFromRow(rawVolDivisor, billingType) : parseVolumetricDivisorFromBillingType(billingType);
 
             idx++;
             parsed.push({
@@ -837,7 +947,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
 
             setShippingData(finalData);
             setShippingLoaded(true);
-            localStorage.setItem("ozon_shipping_data", JSON.stringify(finalData));
+            safeLocalStorageSet("ozon_shipping_data", JSON.stringify(finalData));
             resolve();
           } catch (err) {
             reject(err);
@@ -869,7 +979,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
 
               setShippingData(finalData);
               setShippingLoaded(true);
-              localStorage.setItem("ozon_shipping_data", JSON.stringify(finalData));
+              safeLocalStorageSet("ozon_shipping_data", JSON.stringify(finalData));
               resolve();
             } catch (e) {
               reject(e);
@@ -909,7 +1019,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
   const updateColumnMapping = useCallback((type: "commission" | "shipping", mapping: Record<string, number>) => {
     setColumnMapping((prev) => {
       const newMapping = { ...prev, [type]: mapping };
-      localStorage.setItem("ozon_column_mapping", JSON.stringify(newMapping));
+      safeLocalStorageSet("ozon_column_mapping", JSON.stringify(newMapping));
       return newMapping;
     });
   }, []);
@@ -919,7 +1029,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
    */
   const updateInterceptionConfig = useCallback((config: Record<string, boolean>) => {
     setInterceptionConfig(config);
-    localStorage.setItem("ozon_interception_config", JSON.stringify(config));
+    safeLocalStorageSet("ozon_interception_config", JSON.stringify(config));
   }, []);
 
   const getCategories = useCallback(() => {
@@ -1142,12 +1252,8 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         }
       });
 
-      // 按运费升序排列（使用体积重计算）
-      available.sort((a, b) => {
-        const costA = calculateShippingCost(a, 0, length, width, height, weight);
-        const costB = calculateShippingCost(b, 0, length, width, height, weight);
-        return costA - costB;
-      });
+      // 🔴 移除内部排序：由调用方（page.tsx）统一按用户选择的排序模式排序
+      // 原逻辑在此处按运费排序，与 page.tsx 的 sortedAvailableChannels 重复
 
       return { available, unavailable };
     },

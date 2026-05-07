@@ -188,10 +188,10 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
         </div>
       </div>
 
-      {/* 5. 计费详情 (默认折叠) - 计费重醒目 */}
+      {/* 5. 计费详情 (默认折叠) - 计费重醒目 - 带动画 */}
       <details className="mt-3 group">
         <summary className="text-[10px] cursor-pointer hover:text-[#6366F1] list-none flex items-center gap-1 select-none font-medium">
-          <span className="group-open:rotate-180 transition-transform">▼</span> 
+          <span className="transition-transform duration-200 group-open:rotate-180">▼</span> 
           <span>查看计费详情 </span>
           <span className={`font-bold ${billing?.isVolumetric ? "text-[#EF4444]" : "text-foreground"}`}>
             (计费重: {freightData.billingWeight}g)

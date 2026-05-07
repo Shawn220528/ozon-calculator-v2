@@ -31,6 +31,9 @@ import { CalculationInput, ShippingChannel } from "@/lib/types";
  * 方向 A: 人民币 ➔ 卢布 (CNY → RUB): val * exchangeRate
  * 方向 B: 卢布 ➔ 人民币 (RUB → CNY): val / exchangeRate
  * 
+ * ⚠️ 内部计算引擎使用 effectiveExchangeRate = 1/exchangeRate (RMB/RUB)
+ *    这是为了计算引擎的数学一致性，用户界面始终使用 exchangeRate
+ * 
  * 禁止: 任何反向逻辑 (如 val / exchangeRate 用于 CNY→RUB)
  * ========================================================
  */
@@ -75,9 +78,18 @@ interface InputPanelProps {
   // 🔹 利润率锁定：null=未锁定, 数字=锁定的利润率值(%)
   lockedMargin?: number | null;
   onToggleMarginLock?: () => void;
+  // 🔹 智能售价建议
+  suggestedPriceInfo?: {
+    suggestedPriceRMB: number;
+    suggestedPriceRUB: number;
+    channelName: string;
+    fixableChannels: Array<{ channelName: string; minValueRUB: number; minPriceRMB: number }>;
+    unfixableChannelCount: number;
+    cannotFixByPrice: boolean;
+  } | null;
 }
 
-export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = 'RMB', currentProfitMargin, onReversePriceFromMargin, marginError, onReset, adRiskControl, shippingData = [], selectedBillingInfo, lockedMargin = null, onToggleMarginLock }: InputPanelProps) {
+export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = 'RMB', currentProfitMargin, onReversePriceFromMargin, marginError, onReset, adRiskControl, shippingData = [], selectedBillingInfo, lockedMargin = null, onToggleMarginLock, suggestedPriceInfo }: InputPanelProps) {
   const { getCategories } = useDataHub();
   const categories = useMemo(() => getCategories(), [getCategories]);
   
@@ -199,7 +211,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 type="number"
                 min="0"
                 step="0.1"
-                value={input.length || ""}
+                value={input.length || input.length === 0 ? input.length : ""}
                 onChange={(e) => updateField("length", parseFloat(e.target.value) || 0)}
                 className="h-9 text-sm"
               />
@@ -210,7 +222,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 type="number"
                 min="0"
                 step="0.1"
-                value={input.width || ""}
+                value={input.width || input.width === 0 ? input.width : ""}
                 onChange={(e) => updateField("width", parseFloat(e.target.value) || 0)}
                 className="h-9 text-sm"
               />
@@ -221,7 +233,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 type="number"
                 min="0"
                 step="0.1"
-                value={input.height || ""}
+                value={input.height || input.height === 0 ? input.height : ""}
                 onChange={(e) => updateField("height", parseFloat(e.target.value) || 0)}
                 className="h-9 text-sm"
               />
@@ -234,7 +246,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               type="number"
               min="0"
               step="1"
-              value={input.weight || ""}
+              value={input.weight || input.weight === 0 ? input.weight : ""}
               onChange={(e) => updateField("weight", parseFloat(e.target.value) || 0)}
               className="h-9 text-sm"
             />
@@ -608,6 +620,26 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   placeholder="0.00"
                 />
               </div>
+              {/* 💡 智能售价建议标签 */}
+              {suggestedPriceInfo && suggestedPriceInfo.suggestedPriceRMB > 0 && input.targetPriceRMB <= 0 && (
+                <div className="flex items-center gap-1 mt-1">
+                  <span className="text-[10px] text-amber-600">💡 建议</span>
+                  <button
+                    onClick={() => onInputChange({ ...input, targetPriceRMB: Math.ceil(suggestedPriceInfo.suggestedPriceRMB) })}
+                    className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded hover:bg-amber-100 border border-amber-200"
+                  >
+                    ¥{Math.ceil(suggestedPriceInfo.suggestedPriceRMB)}+
+                  </button>
+                  <span className="text-[9px] text-muted-foreground">
+                    (≈{Math.round(suggestedPriceInfo.suggestedPriceRUB).toLocaleString()}₽)
+                  </span>
+                  {suggestedPriceInfo.unfixableChannelCount > 0 && (
+                    <span className="text-[8px] text-orange-500">
+                      ({suggestedPriceInfo.unfixableChannelCount}个渠道不可修复)
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             {/* RUB 售价 */}
             <div className="space-y-1.5">
@@ -759,9 +791,10 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               const rivalInRMB = rivalCurrency === 'RUB' ? rivalPrice / input.exchangeRate : rivalPrice;
               const diff = input.targetPriceRMB - rivalInRMB;
               const isHigher = diff >= 0;
+              // 🔴 修复：售价高于竞品 → 价格劣势（红色），低于竞品 → 价格优势（绿色）
               return (
-                <div className={`text-xs p-2 rounded-md font-medium ${isHigher ? "text-green-700 bg-green-50" : "text-red-700 bg-red-50"}`}>
-                  {isHigher ? "高于竞品" : "低于竞品"} ¥{Math.abs(diff).toFixed(2)}
+                <div className={`text-xs p-2 rounded-md font-medium ${isHigher ? "text-orange-700 bg-orange-50" : "text-green-700 bg-green-50"}`}>
+                  {isHigher ? "⚠️ 高于竞品" : "✓ 低于竞品"} ¥{Math.abs(diff).toFixed(2)}
                 </div>
               );
             })()}
@@ -803,6 +836,29 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 {" "}(≈{(input.targetPriceRMB / (1 - input.promotionDiscount / 100) / input.exchangeRate).toFixed(0)} ₽)
               </div>
             )}
+          </div>
+          
+          {/* 🔹 多件装购买数量 */}
+          <div className="space-y-1.5">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Label className="text-xs cursor-help">多件装数量</Label>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={8} className="max-w-xs z-[9999] bg-white border border-slate-200 shadow-lg p-3">
+                  <p className="text-xs text-slate-600">客户单次购买多件时，运费可按总重计费再均摊，每件运费更低。</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <Input
+              type="number"
+              min="1"
+              max="100"
+              step="1"
+              value={input.multiItemCount || 1}
+              onChange={(e) => updateField("multiItemCount", Math.max(1, parseInt(e.target.value) || 1))}
+              className="h-9 text-sm"
+            />
           </div>
         </CardContent>
       </Card>

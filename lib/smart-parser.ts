@@ -3,6 +3,11 @@
  * 实现模糊表头匹配、语义预判和数据校验
  */
 
+// 🔴 生产环境静默日志
+const isDev = process.env.NODE_ENV === 'development';
+const devLog = isDev ? console.log : () => {};
+const devWarn = isDev ? console.warn : () => {};
+
 // ========================================================
 // 类型定义
 // ========================================================
@@ -178,7 +183,7 @@ export function createLogisticsMappings(headers: string[]): FieldMapping[] {
     });
   }
   
-  console.log(`[LOGISTICS_SCHEMA] 自动映射完成: ${mappings.filter(m => m.columnIndex >= 0).length}/${mappings.length} 个字段匹配成功`);
+  devLog(`[LOGISTICS_SCHEMA] 自动映射完成: ${mappings.filter(m => m.columnIndex >= 0).length}/${mappings.length} 个字段匹配成功`);
   
   return mappings;
 }
@@ -511,7 +516,7 @@ export function smartParseCSV(
           }
         });
         
-        console.log(`✅ 成功解析 ${parsedConstraints.size} 个物流渠道的尺寸约束`);
+        devLog(`✅ 成功解析 ${parsedConstraints.size} 个物流渠道的尺寸约束`);
       }
     }
     
@@ -644,7 +649,7 @@ export function parseSizeConstraints(text: string): SizeConstraints {
   
   // 🔹 打印解析结果
   if (maxSum !== null || maxLongEdge !== null) {
-    console.log(`📏 尺寸约束解析成功:`, {
+    devLog(`📏 尺寸约束解析成功:`, {
       原文: normalizedText,
       边长总和: maxSum ? `${maxSum}cm` : '未识别',
       长边限制: maxLongEdge ? `${maxLongEdge}cm` : '未识别',

@@ -3,6 +3,8 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { DataHubProvider } from "@/lib/data-hub-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import ErrorBoundary from "@/components/error-boundary";
+import type { ReactNode } from "react";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -14,16 +16,18 @@ export const metadata: Metadata = {
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode;
+  children: ReactNode;
 }>) {
   return (
     <html lang="zh-CN">
       <body className={`${inter.className} antialiased`}>
-        <DataHubProvider>
-          <TooltipProvider>
-            {children}
-          </TooltipProvider>
-        </DataHubProvider>
+        <ErrorBoundary>
+          <DataHubProvider>
+            <TooltipProvider>
+              {children}
+            </TooltipProvider>
+          </DataHubProvider>
+        </ErrorBoundary>
       </body>
     </html>
   );

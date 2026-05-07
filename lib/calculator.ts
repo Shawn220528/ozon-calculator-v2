@@ -1,11 +1,11 @@
 /**
- * Ozon rFBS 跨境精算核心代数模型
- * 严格遵循 PRD v2.1 RMB主导模式
- * 
- * 核心变量定义（RMB主导）：
- *   P_rmb = 用户输入的售价 (RMB)
- *   P_rub = P_rmb / E  (E = 汇率 RMB/RUB, 即 1 RUB = E RMB)
- *   E = 汇率 (RMB/RUB)
+* Ozon rFBS 跨境精算核心代数模型
+* 严格遵循 PRD v2.1 RMB主导模式
+* 
+* 核心变量定义（RMB主导）：
+*   P_rmb = 用户输入的售价 (RMB)
+*   P_rub = P_rmb × exchangeRate  (exchangeRate = 1 CNY = X RUB)
+*   E = exchangeRate (汇率: 1 CNY = X RUB)
  *   C = 平台佣金率(%)
  *   W = 提现手续费率(%)
  *   Acpa = CPA广告占比(%)
@@ -21,7 +21,7 @@
  *   佣金匹配：必须用 P_rub 去匹配 Ozon 三个阶梯
  */
 
-import { CalculationInput, CalculationResult, CategoryCommission, ShippingChannel } from "./types";
+import { CalculationInput, CalculationResult, CategoryCommission, ShippingChannel, UnavailableShippingChannel } from "./types";
 import { calculateShippingCost, parseBillingWeight } from "./data-hub-context";
 
 // 佣金阶梯边界常量（RUB）
@@ -1350,3 +1350,65 @@ export function performFullCalculation(
 const DEFAULT_SHIPPING_DATA: ShippingChannel[] = [
   { id: "1", name: "中国邮政挂号小包", thirdParty: "中国邮政", serviceTier: "Small", serviceLevel: "Economy", fixFee: 2, varFeePerGram: 0.063, pricePerKg: 65, pricePerCubic: 0, minWeight: 0, maxWeight: 2000, maxLength: 60, maxWidth: 60, maxHeight: 60, maxSumDimension: 150, deliveryTimeMin: 25, deliveryTimeMax: 35, deliveryTime: 30, maxValueRUB: 30000, maxValue: 2460, billingType: "实际重量", volumetricDivisor: 0, ozonRating: 0, batteryAllowed: false, liquidAllowed: false },
 ];
+
+/**
+ * 智能售价建议：当用户未填写售价且无可用渠道时，
+ * 分析哪些渠道仅因货值被拦截，推算最低匹配售价
+ * 
+ * 分类逻辑：
+ * - 仅因货值被拦截 → 可通过调价修复
+ * - 有其他原因(尺寸/重量/属性) → 调价无法修复
+ */
+export function calculateSuggestedPrice(
+  unavailableChannels: UnavailableShippingChannel[],
+  exchangeRate: number // RMB/RUB (1 RUB = exchangeRate RMB)
+): {
+  suggestedPriceRMB: number;       // 建议最低售价(RMB)
+  suggestedPriceRUB: number;       // 建议最低售价(RUB)
+  channelName: string;             // 对应渠道名
+  fixableChannels: Array<{         // 可修复渠道列表
+    channelName: string;
+    minValueRUB: number;
+    minPriceRMB: number;
+  }>;
+  unfixableChannelCount: number;   // 不可修复渠道数量
+  cannotFixByPrice: boolean;       // 是否所有渠道都不可通过调价修复
+} {
+  const fixableChannels: Array<{ channelName: string; minValueRUB: number; minPriceRMB: number }> = [];
+  let unfixableCount = 0;
+
+  for (const ch of unavailableChannels) {
+    if (!ch.interceptionReasons || ch.interceptionReasons.length === 0) continue;
+    
+    const hasPriceReason = ch.interceptionReasons.some(r => r.dimension === "货值");
+    const hasOtherReason = ch.interceptionReasons.some(r => r.dimension !== "货值");
+    
+    if (hasPriceReason && !hasOtherReason) {
+      // 仅因货值被拦截 → 可通过调价修复
+      const minValueRUB = ch.minValueRUB || 0;
+      if (minValueRUB > 0) {
+        fixableChannels.push({
+          channelName: ch.name,
+          minValueRUB,
+          minPriceRMB: minValueRUB * exchangeRate, // RUB → RMB
+        });
+      }
+    } else if (hasOtherReason) {
+      // 有非货值拦截 → 不可修复
+      unfixableCount++;
+    }
+  }
+
+  // 按售价升序排列
+  fixableChannels.sort((a, b) => a.minPriceRMB - b.minPriceRMB);
+
+  const best = fixableChannels[0];
+  return {
+    suggestedPriceRMB: best?.minPriceRMB || 0,
+    suggestedPriceRUB: best?.minValueRUB || 0,
+    channelName: best?.channelName || "",
+    fixableChannels,
+    unfixableChannelCount: unfixableCount,
+    cannotFixByPrice: fixableChannels.length === 0 && unfixableCount > 0,
+  };
+}

@@ -130,13 +130,13 @@ export function PreviewMappingDialog({
   const renderStatusIcon = (status: "success" | "warning" | "error" | "ignored") => {
     switch (status) {
       case "success":
-        return <CheckCircle2 className="h-4 w-4 text-green-600" />;
+        return <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />;
       case "warning":
-        return <AlertTriangle className="h-4 w-4 text-amber-600" />;
+        return <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />;
       case "error":
-        return <XCircle className="h-4 w-4 text-red-600" />;
+        return <XCircle className="h-3.5 w-3.5 text-red-600" />;
       case "ignored":
-        return <Info className="h-4 w-4 text-gray-400" />;
+        return <Info className="h-3.5 w-3.5 text-gray-400" />;
     }
   };
   
@@ -153,7 +153,9 @@ export function PreviewMappingDialog({
   const interceptorEnabledCount = mappings.filter(m => m.interceptionEnabled === true).length;
   
   // 🔹 检查是否可以确认（只检查核心字段）
-  const requiredFields = LOGISTICS_SCHEMA.filter(f => f.required).map(f => f.key);
+  const requiredFields = dataType === "shipping"
+    ? LOGISTICS_SCHEMA.filter(f => f.required).map(f => f.key)
+    : ["primaryCategory", "secondaryCategory", "tier1Rate", "tier2Rate", "tier3Rate"];
   const missingRequired = requiredFields.filter(field => {
     const mapping = mappings.find(m => m.systemField === field);
     return !mapping || mapping.columnIndex === -1;
@@ -163,54 +165,54 @@ export function PreviewMappingDialog({
   
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+      <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden !p-3 gap-2 flex flex-col">
+        <DialogHeader className="pb-0">
+          <DialogTitle className="flex items-center gap-1.5 text-sm">
             {dataType === "commission" ? "📊 佣金表智能导入向导" : "🚚 物流表智能导入向导"}
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-xs">
             智能嗅探 CSV 表头，自动匹配系统字段。拦截字段可开关是否参与筛选。
           </DialogDescription>
         </DialogHeader>
         
-        <div className="flex-1 overflow-y-auto space-y-4">
+        <div className="space-y-1 max-w-full">
           {/* 步骤提示 */}
-          <div className="flex items-center gap-4 text-sm">
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 rounded-full border border-indigo-200">
-              <FileText className="h-4 w-4 text-[#6366F1]" />
-              <span className="text-[#6366F1] font-medium">步骤1: 文件解析</span>
+          <div className="flex items-center gap-1.5 text-xs flex-wrap">
+            <div className="flex items-center gap-1 px-1.5 py-0.5 bg-indigo-50 rounded-full border border-indigo-200 whitespace-nowrap">
+              <FileText className="h-3 w-3 text-[#6366F1]" />
+              <span className="text-[#6366F1] font-medium">步骤1: 解析</span>
             </div>
-            <div className="text-muted-foreground">→</div>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-purple-50 rounded-full border border-purple-200">
-              <Sparkles className="h-4 w-4 text-purple-600" />
-              <span className="text-purple-700 font-medium">步骤2: 动态映射</span>
+            <span className="text-muted-foreground">→</span>
+            <div className="flex items-center gap-1 px-1.5 py-0.5 bg-purple-50 rounded-full border border-purple-200 whitespace-nowrap">
+              <Sparkles className="h-3 w-3 text-purple-600" />
+              <span className="text-purple-700 font-medium">步骤2: 映射</span>
             </div>
           </div>
           
           {/* 解析状态 */}
-          <div className={`p-4 rounded-lg border-2 ${
+          <div className={`p-1.5 rounded-lg border ${
             recognitionRate >= 90 ? "bg-green-50 border-green-200" :
             recognitionRate >= 70 ? "bg-amber-50 border-amber-200" :
             "bg-red-50 border-red-200"
           }`}>
-            <div className="flex items-center gap-2 mb-2">
-              <Info className="h-4 w-4" />
-              <span className="font-bold">
-                已自动识别 {recognizedCount}/{totalCount} 个核心字段 ({recognitionRate}%)
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              <span className="font-semibold text-xs whitespace-nowrap">
+                识别 {recognizedCount}/{totalCount} ({recognitionRate}%)
               </span>
               {dataType === "shipping" && (
-                <span className="ml-4 text-xs text-purple-600 font-medium">
-                  ✓ 已启用 {interceptorEnabledCount} 个拦截字段
+                <span className="text-xs text-purple-600 font-medium whitespace-nowrap">
+                  ✓ 拦截 {interceptorEnabledCount} 个
                 </span>
               )}
             </div>
             
             {/* 错误提示 */}
             {parsedData.errors.length > 0 && (
-              <div className="mt-3 space-y-1">
+              <div className="mt-1 space-y-0.5">
                 {parsedData.errors.map((error, i) => (
-                  <div key={i} className="flex items-start gap-2 text-sm text-red-700">
-                    <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <div key={i} className="flex items-start gap-1 text-xs text-red-700">
+                    <XCircle className="h-3.5 w-3.5 shrink-0" />
                     <span>{error}</span>
                   </div>
                 ))}
@@ -219,11 +221,11 @@ export function PreviewMappingDialog({
           </div>
           
           {/* 🔹 三列动态映射面板 */}
-          <div className="border-2 border-slate-200 rounded-lg overflow-hidden">
-            <div className="grid grid-cols-12 bg-slate-100 border-b-2 border-slate-300">
-              <div className="col-span-3 p-3 font-bold text-slate-700 text-sm">系统字段</div>
-              <div className="col-span-5 p-3 font-bold text-slate-700 text-sm">CSV 表头匹配</div>
-              <div className="col-span-4 p-3 font-bold text-slate-700 text-sm text-center">启用拦截筛选</div>
+          <div className="border border-slate-200 rounded-lg overflow-hidden text-xs">
+            <div className="grid grid-cols-12 bg-slate-100 border-b border-slate-300 font-semibold text-slate-700">
+              <div className="col-span-4 p-1.5">系统字段</div>
+              <div className="col-span-7 p-1.5">CSV 表头匹配</div>
+              <div className="col-span-1 p-1.5 text-center">拦截</div>
             </div>
             
             {mappings.map((mapping) => {
@@ -239,80 +241,68 @@ export function PreviewMappingDialog({
                   }`}
                 >
                   {/* 列1: 系统字段名 */}
-                  <div className="col-span-3 p-3 flex flex-col justify-center">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-slate-800 text-sm">{getFieldLabel(mapping.systemField)}</span>
-                    </div>
-                    {/* 字段级别标识 */}
-                    <div className="flex items-center gap-1.5 mt-1">
+                  <div className="col-span-4 p-1.5 flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="font-medium text-slate-800 truncate">{getFieldLabel(mapping.systemField)}</span>
                       {tier === "required" && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-bold">
-                          必填
-                        </span>
+                        <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-red-100 text-red-700 font-bold">必填</span>
                       )}
                       {tier === "interceptor" && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">
-                          拦截
-                        </span>
+                        <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">拦截</span>
                       )}
                       {tier === "optional" && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-medium">
-                          可选
-                        </span>
+                        <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-gray-100 text-gray-600 font-medium">可选</span>
                       )}
                     </div>
                   </div>
                   
                   {/* 列2: CSV 表头匹配下拉框 */}
-                  <div className="col-span-5 p-3 flex items-center">
-                    <Select
-                      value={mapping.columnIndex.toString()}
-                      onValueChange={(value) => updateMapping(mapping.systemField, parseInt(value))}
-                    >
-                      <SelectTrigger className={`w-full h-9 ${
-                        status === "error" ? "border-red-300 bg-red-50" : 
-                        status === "success" ? "border-green-300 bg-green-50" : ""
-                      }`}>
-                        <SelectValue placeholder="请选择列" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="-1">
-                          {tier === "required" ? "⚠️ 必须选择" : "不映射（跳过）"}
-                        </SelectItem>
-                        {parsedData.headers.map((header, index) => (
-                          <SelectItem key={index} value={index.toString()}>
-                            {header || `列 ${index + 1}`}
+                  <div className="col-span-7 p-1.5 flex items-center gap-1.5">
+                    <div className="flex-1 min-w-0">
+                      <Select
+                        value={mapping.columnIndex.toString()}
+                        onValueChange={(value) => updateMapping(mapping.systemField, parseInt(value))}
+                      >
+                        <SelectTrigger className={`w-full h-7 text-xs ${
+                          status === "error" ? "border-red-300 bg-red-50" : 
+                          status === "success" ? "border-green-300 bg-green-50" : ""
+                        }`}>
+                          <SelectValue placeholder="请选择列" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="-1">
+                            {tier === "required" ? "⚠️ 必须选择" : "不映射（跳过）"}
                           </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    
-                    {/* 置信度指示 */}
-                    <div className="ml-2 flex items-center gap-1">
+                          {parsedData.headers.map((header, index) => (
+                            <SelectItem key={index} value={index.toString()}>
+                              {header || `列 ${index + 1}`}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="shrink-0 flex items-center gap-1">
                       {renderStatusIcon(status)}
-                      <span className="text-xs text-muted-foreground">
-                        {mapping.columnIndex === -1 ? "未映射" : `${Math.round(mapping.confidence * 100)}%`}
-                      </span>
                     </div>
                   </div>
                   
                   {/* 列3: 启用拦截 Toggle */}
-                  <div className="col-span-4 p-3 flex items-center justify-center">
+                  <div className="col-span-1 p-1.5 flex items-center justify-center">
                     {isInterceptor ? (
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1">
                         <Switch
                           checked={mapping.interceptionEnabled === true}
                           onCheckedChange={(checked) => updateInterceptionEnabled(mapping.systemField, checked)}
-                          className="data-[state=checked]:bg-purple-600"
+                          className="data-[state=checked]:bg-purple-600 scale-75"
                         />
-                        <span className={`text-xs font-medium ${
+                        <span className={`text-[10px] font-medium ${
                           mapping.interceptionEnabled === true ? "text-purple-700" : "text-gray-400"
                         }`}>
-                          {mapping.interceptionEnabled === true ? "已启用" : "已禁用"}
+                          {mapping.interceptionEnabled === true ? "开" : "关"}
                         </span>
                       </div>
                     ) : (
-                      <span className="text-xs text-gray-400 italic">不参与拦截</span>
+                      <span className="text-[10px] text-gray-400 italic">—</span>
                     )}
                   </div>
                 </div>
@@ -321,18 +311,18 @@ export function PreviewMappingDialog({
           </div>
           
           {/* 数据预览 */}
-          <div>
-            <h3 className="font-bold mb-2 flex items-center gap-2">
-              <Info className="h-4 w-4" />
+          <div className="w-full min-w-0 overflow-hidden">
+            <h3 className="font-semibold mb-1 flex items-center gap-1.5">
+              <Info className="h-3.5 w-3.5" />
               数据预览（前 5 行）
             </h3>
-            <div className="border rounded-lg overflow-x-auto">
-              <table className="w-full text-xs">
+            <div className="border rounded-lg overflow-x-auto max-h-48 w-full">
+              <table style={{ minWidth: 'max-content', width: '100%' }} className="text-xs">
                 <thead className="bg-muted sticky top-0">
                   <tr>
-                    <th className="p-2 text-left border-r">#</th>
+                    <th className="p-1.5 text-left border-r whitespace-nowrap">#</th>
                     {parsedData.headers.map((header, i) => (
-                      <th key={i} className="p-2 text-left border-r min-w-[120px]">
+                      <th key={i} className="p-1.5 text-left border-r whitespace-nowrap min-w-[110px]">
                         {header || `列 ${i + 1}`}
                       </th>
                     ))}
@@ -341,14 +331,14 @@ export function PreviewMappingDialog({
                 <tbody>
                   {previewRows.map((row, i) => (
                     <tr key={i} className="border-t hover:bg-muted/50">
-                      <td className="p-2 border-r font-medium">{i + 1}</td>
+                      <td className="p-1.5 border-r font-medium whitespace-nowrap">{i + 1}</td>
                       {row.map((cell, j) => {
                         const isMapped = mappings.some(m => m.columnIndex === j);
                         const hasError = !cell || cell.trim() === "" || cell === "-";
                         return (
                           <td 
                             key={j} 
-                            className={`p-2 border-r ${
+                            className={`p-1.5 border-r truncate min-w-[110px] ${
                               hasError && isMapped ? "bg-red-50 text-red-700" : ""
                             }`}
                           >
@@ -365,37 +355,37 @@ export function PreviewMappingDialog({
           
           {/* 🔹 尺寸约束解析结果 */}
           {dataType === "shipping" && parsedData.parsedConstraints && parsedData.parsedConstraints.size > 0 && (
-            <div className="border rounded-lg p-4 bg-indigo-50/50 border-indigo-200">
-              <h3 className="font-semibold mb-3 flex items-center gap-2 text-[#6366F1]">
-                <Ruler className="h-4 w-4" />
-                尺寸约束解析结果
+            <div className="border rounded-lg p-1.5 bg-indigo-50/50 border-indigo-200">
+              <h3 className="font-semibold mb-1 flex items-center gap-1 text-[#6366F1] text-xs">
+                <Ruler className="h-3 w-3" />
+                尺寸约束解析
               </h3>
-              <div className="space-y-2 text-sm">
+              <div className="space-y-1 text-xs">
                 {Array.from(parsedData.parsedConstraints.entries()).slice(0, 3).map(([rowKey, constraints]) => {
                   const rowIndex = parseInt(rowKey.replace("row_", ""));
                   const row = parsedData.rows[rowIndex];
                   const channelName = row ? row[0] : `渠道 ${rowIndex + 1}`;
                   
                   return (
-                    <div key={rowKey} className="p-3 bg-card rounded border border-border">
-                      <div className="font-medium mb-1">{channelName}</div>
-                      <div className="flex gap-4 text-xs text-foreground">
+                    <div key={rowKey} className="p-1.5 bg-card rounded border border-border">
+                      <div className="font-medium mb-0.5 truncate">{channelName}</div>
+                      <div className="flex gap-3 text-foreground">
                         {constraints.maxSum !== null && (
                           <span className="flex items-center gap-1">
-                            <CheckCircle2 className="h-3 w-3 text-green-600" />
-                            总和限 {constraints.maxSum}cm
+                            <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                            总和≤{constraints.maxSum}cm
                           </span>
                         )}
                         {constraints.maxLongEdge !== null && (
                           <span className="flex items-center gap-1">
-                            <CheckCircle2 className="h-3 w-3 text-green-600" />
-                            长边限 {constraints.maxLongEdge}cm
+                            <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                            长边≤{constraints.maxLongEdge}cm
                           </span>
                         )}
                         {constraints.maxSum === null && constraints.maxLongEdge === null && (
                           <span className="flex items-center gap-1 text-amber-600">
-                            <AlertTriangle className="h-3 w-3" />
-                            未能识别，需手动输入
+                            <AlertTriangle className="h-3 w-3 shrink-0" />
+                            未识别，需手动
                           </span>
                         )}
                       </div>
@@ -404,7 +394,7 @@ export function PreviewMappingDialog({
                 })}
                 {parsedData.parsedConstraints.size > 3 && (
                   <div className="text-xs text-muted-foreground italic">
-                    ... 还有 {parsedData.parsedConstraints.size - 3} 个渠道的约束已解析
+                    ... 还有 {parsedData.parsedConstraints.size - 3} 个
                   </div>
                 )}
               </div>
@@ -412,51 +402,34 @@ export function PreviewMappingDialog({
           )}
         </div>
         
-        <DialogFooter className="gap-2 flex-col items-stretch">
+        <DialogFooter className="flex-col items-stretch gap-1">
           {/* 🔹 状态摘要 */}
-          <div className="flex items-center justify-between text-xs text-muted-foreground pb-2 border-b">
-            <div className="flex items-center gap-4">
-              <span>已映射: {mappedCount}/{totalCount}</span>
-              {dataType === "shipping" && interceptorEnabledCount > 0 && (
-                <span className="text-purple-600 font-medium">
-                  ✓ 拦截字段: {interceptorEnabledCount} 个
-                </span>
-              )}
-            </div>
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground pb-0.5 border-b">
+            <span>已映射 {mappedCount}/{totalCount}</span>
+            {dataType === "shipping" && interceptorEnabledCount > 0 && (
+              <span className="text-purple-600 font-medium">拦截 {interceptorEnabledCount} 个</span>
+            )}
           </div>
           
           {/* 🔹 缺失必填字段提示 */}
           {missingRequired.length > 0 && (
-            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm">
-              <div className="flex items-start gap-2">
-                <XCircle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+            <div className="p-1.5 rounded-lg bg-red-50 border border-red-200 text-xs">
+              <div className="flex items-start gap-1">
+                <XCircle className="h-3.5 w-3.5 text-red-600 shrink-0" />
                 <div>
-                  <span className="font-bold text-red-700">缺少必填字段：</span>
+                  <span className="font-bold text-red-700">缺少：</span>
                   <span className="text-red-700">
                     {missingRequired.map(f => getFieldLabel(f)).join("、")}
                   </span>
-                  <div className="text-xs text-red-600 mt-1">
-                    这些字段为运费计算必需，请务必映射
-                  </div>
                 </div>
               </div>
             </div>
           )}
           
           {/* 🔹 按钮区域 */}
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={onCancel}
-              className="flex-1"
-            >
-              取消
-            </Button>
-            <Button
-              onClick={() => onConfirm(mappings)}
-              disabled={!canConfirm}
-              className="flex-1"
-            >
+          <div className="flex gap-2 pt-0.5">
+            <Button variant="outline" onClick={onCancel} className="flex-1 h-8 text-xs">取消</Button>
+            <Button onClick={() => onConfirm(mappings)} disabled={!canConfirm} className="flex-1 h-8 text-xs">
               {canConfirm ? "确认导入" : "请映射必填字段"}
             </Button>
           </div>
