@@ -234,7 +234,7 @@ function importConfig(onSuccess: () => void, onError: (err: string) => void) {
 }
 
 export default function Home() {
-  const { getCommissionByCategory, getShippingChannels, shippingData, clearCommissionData, clearShippingData, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig } = useDataHub();
+  const { getCommissionByCategory, getShippingChannels, shippingData, clearCommissionData, clearShippingData, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig, lastImportSummary } = useDataHub();
   const [input, setInput] = useState<CalculationInput>(DEFAULT_INPUT);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [marginError, setMarginError] = useState<string | null>(null);
@@ -736,8 +736,8 @@ export default function Home() {
     } catch (err) {
       // 回退到直接加载
       try {
-        await loadCommissionData(file, "overwrite");
-        setUploadToast({ message: `✅ 佣金表 "${file.name}" 导入成功！`, type: 'success' });
+        const summary = await loadCommissionData(file, "overwrite");
+        setUploadToast({ message: `✅ 佣金表 "${file.name}" 导入成功：${summary.categories || 0} 个类目`, type: 'success' });
       } catch (loadErr) {
         console.error("上传佣金表失败:", loadErr);
         setUploadToast({ message: `❌ 佣金表导入失败: ${loadErr instanceof Error ? loadErr.message : '未知错误'}`, type: 'error' });
@@ -763,8 +763,8 @@ export default function Home() {
     } catch (err) {
       // 回退到直接加载
       try {
-        await loadShippingData(file, "overwrite");
-        setUploadToast({ message: `✅ 物流表 "${file.name}" 导入成功！`, type: 'success' });
+        const summary = await loadShippingData(file, "overwrite");
+        setUploadToast({ message: `✅ 物流表 "${file.name}" 导入成功：${summary.channels || 0} 条渠道，人民币货值 ${summary.valueRMBMapped || 0} 条，卢布货值 ${summary.valueRUBMapped || 0} 条`, type: 'success' });
       } catch (loadErr) {
         console.error("上传物流表失败:", loadErr);
         setUploadToast({ message: `❌ 物流表导入失败: ${loadErr instanceof Error ? loadErr.message : '未知错误'}`, type: 'error' });
@@ -779,15 +779,15 @@ export default function Home() {
     if (pendingMappingFile) {
       try {
         if (mappingDataType === "commission") {
-          await loadCommissionData(pendingMappingFile, "overwrite");
-          setUploadToast({ message: `✅ 佣金表导入成功！`, type: 'success' });
+          const summary = await loadCommissionData(pendingMappingFile, "overwrite");
+          setUploadToast({ message: `✅ 佣金表导入成功：${summary.categories || 0} 个类目`, type: 'success' });
         } else {
           const mappingRecord = Object.fromEntries(
             mappings.map((m) => [m.systemField, m.columnIndex])
           ) as Record<string, number>;
           updateColumnMapping("shipping", mappingRecord);
-          await loadShippingData(pendingMappingFile, "overwrite", mappingRecord);
-          setUploadToast({ message: `✅ 物流表导入成功！`, type: 'success' });
+          const summary = await loadShippingData(pendingMappingFile, "overwrite", mappingRecord);
+          setUploadToast({ message: `✅ 物流表导入成功：${summary.channels || 0} 条渠道，人民币货值 ${summary.valueRMBMapped || 0} 条，卢布货值 ${summary.valueRUBMapped || 0} 条`, type: 'success' });
           
           // 🔹 物流表：提取拦截配置并保存
           const config: Record<string, boolean> = {};
@@ -1091,6 +1091,27 @@ export default function Home() {
           overflowY: 'auto'
         }}
       >
+        <div className="flex-shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-white text-slate-700 border border-slate-200 shadow-sm">
+          <span>货值口径：{input.valueLimitCurrency === "RMB" ? "人民币" : "卢布"}</span>
+          <span className="text-slate-300">|</span>
+          <span>售价：{cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0)} RUB</span>
+          <span className="text-slate-300">|</span>
+          <span>汇率：1 CNY = {input.exchangeRate.toFixed(2)} RUB</span>
+        </div>
+
+        {lastImportSummary && (
+          <div className="flex-shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-sm">
+            <FileText className="h-3.5 w-3.5" />
+            {lastImportSummary.type === "shipping" ? (
+              <span>
+                最近导入物流：{lastImportSummary.channels || 0} 条，人民币货值 {lastImportSummary.valueRMBMapped || 0} 条，卢布货值 {lastImportSummary.valueRUBMapped || 0} 条
+              </span>
+            ) : (
+              <span>最近导入佣金：{lastImportSummary.categories || 0} 个类目</span>
+            )}
+          </div>
+        )}
+
         {/* 🔴 致命错误 - 无可用渠道（唯一）- 强烈警报 */}
         {shippingChannels.available.length === 0 && shippingData.length > 0 && (
           <div className="flex-shrink-0 inline-flex items-center gap-1 px-4 py-2 rounded-full text-base font-extrabold bg-red-600 text-white border-4 border-red-800 shadow-2xl animate-critical-flash">
