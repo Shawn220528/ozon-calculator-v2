@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
-import { CategoryCommission, ShippingChannel, UnavailableShippingChannel, ShippingInterceptionReason } from "./types";
+import { CategoryCommission, ImportSummary, ShippingChannel, UnavailableShippingChannel, ShippingInterceptionReason } from "./types";
 import {
   COMMISSION_COLUMN_KEYWORDS,
   SHIPPING_COLUMN_KEYWORDS,
@@ -14,6 +14,12 @@ import { DEFAULT_COMMISSION_DATA, DEFAULT_SHIPPING_DATA } from "./default-data";
 import { buildColumnMapping, getFieldSchema, LOGISTICS_FIELDS } from "./constants";
 import { cnyToRub } from "./currency";
 import type { ValueLimitCurrency } from "./currency";
+import {
+  normalizeLimitValue,
+  parseDeliveryTime as parseDeliveryTimeShared,
+  parseShippingRateString as parseShippingRateStringShared,
+  parseValueRange as parseValueRangeShared,
+} from "./logistics-parsing";
 
 // 佣金阶梯金额边界
 const TIER_BOUNDARIES = [
@@ -35,8 +41,9 @@ interface DataHubContextType {
   shippingLoaded: boolean;
   columnMapping: ColumnMapping;
   interceptionConfig: Record<string, boolean>; // 🔹 拦截配置
-  loadCommissionData: (file: File, mode?: "overwrite" | "merge") => Promise<void>;
-  loadShippingData: (file: File, mode?: "overwrite" | "merge", mappingOverride?: Record<string, number>) => Promise<void>;
+  lastImportSummary: ImportSummary | null;
+  loadCommissionData: (file: File, mode?: "overwrite" | "merge") => Promise<ImportSummary>;
+  loadShippingData: (file: File, mode?: "overwrite" | "merge", mappingOverride?: Record<string, number>) => Promise<ImportSummary>;
   clearCommissionData: () => void;
   clearShippingData: () => void;
   updateColumnMapping: (type: "commission" | "shipping", mapping: Record<string, number>) => void;
@@ -62,13 +69,6 @@ const DataHubContext = createContext<DataHubContextType | undefined>(undefined);
 // ========================================================
 // 工具函数
 // ========================================================
-const normalizeLimitValue = (value: number | undefined): number | undefined => {
-  if (value === undefined || value === null || !Number.isFinite(value) || value >= 999999) {
-    return undefined;
-  }
-  return value;
-};
-
 /**
  * 安全写入 localStorage（含容量保护）
  * 当数据过大或写入失败时，自动降级处理
@@ -254,72 +254,7 @@ function findShippingHeaderRow(rows: string[][]): number {
  * 返回 { fixFee: RMB, varFeePerGram: RMB/g }
  */
 function parseShippingRateString(rateStr: string): { fixFee: number; varFeePerGram: number } {
-  if (!rateStr || rateStr.trim() === "-" || rateStr.trim() === "") {
-    return { fixFee: 0, varFeePerGram: 0 };
-  }
-
-  const result = { fixFee: 0, varFeePerGram: 0 };
-
-  try {
-    // 步骤1: 预处理 - 统一格式
-    // 🔴 修复：先移除千分位逗号（",000" → "000"），再将欧洲小数点逗号转点号
-    // 原逻辑 .replace(/,/g, ".") 会把 "30,000" 误转为 "30.000"
-    let cleaned = rateStr
-      .replace(/(\d),(\d{3})/g, '$1$2')    // 移除千分位逗号: 30,000 → 30000
-      .replace(/,/g, ".")                    // 欧洲小数点: 0,5 → 0.5
-      .replace(/[¥￥$€₽]/gi, "")                             // 移除所有货币符号
-      .replace(/rmb|cny|rub|rubles?|元|卢布/gi, "")           // 移除货币单位
-      .replace(/人民币|固定费|变动费|价格|费用|成本/gi, "")      // 移除中文注释
-      .replace(/\s+/g, " ")                                  // 合并多余空格
-      .trim();
-
-    // 步骤2: 提取变动费部分（优先匹配）
-    // 匹配格式: "0.0468/1 g" 或 "0.0468/1g" 或 "0.0468/g" 或 "0.0468每克"
-    const varPatterns = [
-      /(\d+\.?\d*)\s*\/\s*1\s*[gгкkg]/i,                     // 0.0468/1g
-      /(\d+\.?\d*)\s*\/\s*[gгкkg]/i,                         // 0.0468/g
-      /(\d+\.?\d*)\s*(?:每|per)\s*[gгкkg]/i,                 // 0.0468每克
-      /(\d+\.?\d*)\s*r?\s*b?\s*b?\s*\/\s*g/i,                // 0.0468 RMB/g
-    ];
-
-    for (const pattern of varPatterns) {
-      const match = cleaned.match(pattern);
-      if (match) {
-        result.varFeePerGram = parseFloat(match[1]);
-        // 从字符串中移除已匹配的变动费部分，避免重复匹配
-        cleaned = cleaned.replace(pattern, "");
-        break;
-      }
-    }
-
-    // 步骤3: 提取固定费部分
-    // 在剩余字符串中查找数字
-    const fixedMatch = cleaned.match(/(\d+\.?\d*)/);
-    if (fixedMatch) {
-      result.fixFee = parseFloat(fixedMatch[1]);
-    }
-
-    // 步骤4: 兜底 - 如果仍然没找到，尝试原字符串提取数字
-    if (result.fixFee === 0 && result.varFeePerGram === 0) {
-      const numbers = rateStr.match(/\d+\.?\d*/g);
-      if (numbers && numbers.length >= 1) {
-        result.fixFee = parseFloat(numbers[0]);
-        if (numbers.length >= 2) {
-          // 假设第二个数字是变动费
-          result.varFeePerGram = parseFloat(numbers[1]);
-        }
-      }
-    }
-
-    // 步骤5: 验证和警告
-    if (result.fixFee === 0 && result.varFeePerGram === 0 && rateStr.trim() !== "0" && rateStr.trim() !== "-") {
-      console.warn(`[费率解析警告] 无法解析费率字符串: "${rateStr}"`);
-    }
-  } catch (error) {
-    console.warn(`[费率解析错误] 解析异常: "${rateStr}"`, error);
-  }
-
-  return result;
+  return parseShippingRateStringShared(rateStr);
 }
 
 /**
@@ -390,24 +325,7 @@ function parseDimensionString(dimStr: string): { maxSum: number; maxLength: numb
  * 返回 { min, max }
  */
 function parseValueRange(valStr: string): { min: number; max: number; hasLimit: boolean } {
-  if (!valStr || valStr.trim() === "" || valStr.trim() === "-") {
-    return { min: 0, max: 0, hasLimit: false };
-  }
-
-  // 🔹 关键修复：先移除所有空格和逗号（处理 Ozon 千分位格式 "1 501 - 7,000"）
-  const cleanStr = valStr.replace(/\s/g, "").replace(/,/g, "");
-
-  const match = cleanStr.match(/([\d.]+)\s*[-–—]\s*([\d.]+)/);
-  if (match) {
-    return { min: parseFloat(match[1]), max: parseFloat(match[2]), hasLimit: true };
-  }
-
-  const singleNum = cleanStr.match(/([\d.]+)/);
-  if (singleNum) {
-    return { min: 0, max: parseFloat(singleNum[1]), hasLimit: true };
-  }
-
-  return { min: 0, max: 0, hasLimit: false };
+  return parseValueRangeShared(valStr);
 }
 
 /**
@@ -484,61 +402,8 @@ function generateShippingUniqueId(name: string, serviceLevel: string): string {
  * 返回 { min, max }
  */
 function parseDeliveryTime(timeStr: string): { min: number; max: number } {
-  if (!timeStr || timeStr.trim() === "") {
-    return { min: 20, max: 40 };
-  }
-
-  const normalizeRange = (a: number, b: number): { min: number; max: number } => {
-    const min = Math.min(a, b);
-    const max = Math.max(a, b);
-    if (min > 0 && max <= 120) {
-      return { min, max };
-    }
-    return { min: 20, max: 40 };
-  };
-
-  const value = String(timeStr).trim();
-
-  // Spreadsheet date coercion: "2026/5/14", "2026-05-14", "5/14/2026".
-  // This must run before generic range matching, otherwise "2026-05-14"
-  // can be misread as "26-05".
-  const dateTokens = value.match(/\d+/g)?.map((token) => parseInt(token, 10)) || [];
-  if (dateTokens.length >= 3) {
-    const [first, second, third] = dateTokens;
-    if (first >= 1900 && second >= 1 && second <= 120 && third >= 1 && third <= 120) {
-      return normalizeRange(second, third);
-    }
-    if ((third >= 1900 || third <= 99) && first >= 1 && first <= 120 && second >= 1 && second <= 120) {
-      return normalizeRange(first, second);
-    }
-  }
-
-  // Normal range text: "5-14", "5–14", "5 ~ 14", "5 到 14 天".
-  const rangeMatch = value.match(/(\d{1,3})\s*(?:[-–—~至到]|\.{2})\s*(\d{1,3})/);
-  if (rangeMatch) {
-    return normalizeRange(parseInt(rangeMatch[1], 10), parseInt(rangeMatch[2], 10));
-  }
-
-  // Excel/locale date text that actually means a day range: "5月14日".
-  const chineseDateLike = value.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|号)?/);
-  if (chineseDateLike) {
-    return normalizeRange(parseInt(chineseDateLike[1], 10), parseInt(chineseDateLike[2], 10));
-  }
-
-  // Slash/dot date without year: "5/14", "5.14".
-  if (dateTokens.length === 2 && /[/.]/.test(value)) {
-    return normalizeRange(dateTokens[0], dateTokens[1]);
-  }
-
-  const singleNum = value.match(/(\d{1,3})/);
-  if (singleNum) {
-    const days = parseInt(singleNum[1], 10);
-    if (days > 0 && days <= 120) {
-      return { min: days, max: days };
-    }
-  }
-
-  return { min: 20, max: 40 };
+  const parsed = parseDeliveryTimeShared(timeStr);
+  return { min: parsed.min, max: parsed.max };
 }
 
 
@@ -557,6 +422,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
     commission: {},
     shipping: {},
   });
+  const [lastImportSummary, setLastImportSummary] = useState<ImportSummary | null>(null);
   
   // 🔹 拦截配置状态（从 localStorage 恢复）
   const [interceptionConfig, setInterceptionConfig] = useState<Record<string, boolean>>({});
@@ -576,7 +442,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try {
       // 🔹 数据版本控制：兼容迁移而非暴力清除
-      const DATA_VERSION = "v2.3"; // 兼容升级，修复体积重除数和欧式数字解析
+      const DATA_VERSION = "v2.4"; // 兼容升级，共享物流解析器与人民币/卢布货值摘要
       const savedVersion = localStorage.getItem("ozon_data_version");
       
       // 🔹 先读取所有数据，避免作用域问题
@@ -584,11 +450,11 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
       const savedShipping = localStorage.getItem("ozon_shipping_data");
       const savedMapping = localStorage.getItem("ozon_column_mapping");
       
+      const isMajorUpgrade = Boolean(savedVersion && !savedVersion.startsWith("v2"));
+
       if (savedVersion !== DATA_VERSION) {
         // 🔴 修复：版本升级时不再暴力清除，而是保留用户数据
         // 仅在数据格式完全不兼容时才清除（如 v1.x → v2.x）
-        const isMajorUpgrade = savedVersion && !savedVersion.startsWith("v2");
-        
         if (isMajorUpgrade) {
           localStorage.removeItem("ozon_commission_data");
           localStorage.removeItem("ozon_shipping_data");
@@ -596,7 +462,9 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         }
         // 更新版本号
         safeLocalStorageSet("ozon_data_version", DATA_VERSION);
-      } else {
+      }
+
+      if (!isMajorUpgrade) {
         if (savedCommission) {
           const parsed = JSON.parse(savedCommission);
           if (Array.isArray(parsed) && parsed.length > 0) {
@@ -657,7 +525,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
    * 核心改进：智能寻找真实表头行
    */
   const loadCommissionData = useCallback(async (file: File) => {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<ImportSummary>((resolve, reject) => {
       const ext = file.name.split(".").pop()?.toLowerCase();
 
       const parseRows = (rawRows: string[][]) => {
@@ -719,7 +587,9 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               setCommissionData(parsed);
               setCommissionLoaded(true);
               safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
-              resolve();
+              const summary: ImportSummary = { type: "commission", rows: rawRows.length, categories: parsed.length };
+              setLastImportSummary(summary);
+              resolve(summary);
             } catch (e) {
               reject(e);
             }
@@ -739,7 +609,9 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             setCommissionData(parsed);
             setCommissionLoaded(true);
             safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
-            resolve();
+            const summary: ImportSummary = { type: "commission", rows: rawRows.length, categories: parsed.length };
+            setLastImportSummary(summary);
+            resolve(summary);
           } catch (err) {
             reject(err);
           }
@@ -760,8 +632,16 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
    * @param mode 加载模式：overwrite（覆盖，默认）或 merge（并存更新）
    */
   const loadShippingData = useCallback(async (file: File, mode: "overwrite" | "merge" = "overwrite", mappingOverride?: Record<string, number>) => {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<ImportSummary>((resolve, reject) => {
       const ext = file.name.split(".").pop()?.toLowerCase();
+
+      const makeShippingSummary = (rawRows: string[][], finalData: ShippingChannel[]): ImportSummary => ({
+        type: "shipping",
+        rows: rawRows.length,
+        channels: finalData.length,
+        valueRMBMapped: finalData.filter((ch) => ch.minValue !== undefined || ch.maxValue !== undefined).length,
+        valueRUBMapped: finalData.filter((ch) => ch.minValueRUB !== undefined || ch.maxValueRUB !== undefined).length,
+      });
 
       const parseShippingRows = (rawRows: string[][], sheetName?: string): ShippingChannel[] => {
         // 智能寻找真实表头行
@@ -997,7 +877,9 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             setShippingData(finalData);
             setShippingLoaded(true);
             safeLocalStorageSet("ozon_shipping_data", JSON.stringify(finalData));
-            resolve();
+            const summary = makeShippingSummary(rawRows, finalData);
+            setLastImportSummary(summary);
+            resolve(summary);
           } catch (err) {
             reject(err);
           }
@@ -1029,7 +911,9 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               setShippingData(finalData);
               setShippingLoaded(true);
               safeLocalStorageSet("ozon_shipping_data", JSON.stringify(finalData));
-              resolve();
+              const summary = makeShippingSummary(rawRows, finalData);
+              setLastImportSummary(summary);
+              resolve(summary);
             } catch (e) {
               reject(e);
             }
@@ -1323,6 +1207,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         commissionLoaded,
         shippingLoaded,
         columnMapping,
+        lastImportSummary,
         loadCommissionData,
         loadShippingData,
         clearCommissionData,
