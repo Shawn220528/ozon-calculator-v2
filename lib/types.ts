@@ -182,3 +182,14 @@ export interface CalculationResult {
     };
   };
 }
+
+export interface ImportSummary {
+  type: "commission" | "shipping";
+  rows: number;
+  channels?: number;
+  categories?: number;
+  valueRMBMapped?: number;
+  valueRUBMapped?: number;
+  deliveryDateCorrections?: number;
+  warnings?: string[];
+}
