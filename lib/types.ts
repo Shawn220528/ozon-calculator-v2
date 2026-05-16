@@ -1,3 +1,5 @@
+import type { ValueLimitCurrency } from "./currency";
+
 // 佣金阶梯定义
 export interface CommissionTier {
   min: number; // 最小金额（RUB）
@@ -32,9 +34,9 @@ export interface ShippingChannel {
   deliveryTimeMin: number;         // 最短时效 (天)
   deliveryTimeMax: number;         // 最长时效 (天)
   deliveryTime: number;            // 预计平均时效 (天) = (min+max)/2
-  maxValueRUB: number;             // 最大货值限制 (RUB)
+  maxValueRUB?: number;            // 最大货值限制 (RUB)
   minValueRUB?: number;             // 最小货值限制 (RUB) - 评分组货值区间下限
-  maxValue: number;                // 最大货值限制 (RMB)
+  maxValue?: number;               // 最大货值限制 (RMB)
   minValue?: number;               // 最小货值限制 (RMB)
   billingType: string;             // 计费类型 (实际重量/体积重量)
   volumetricDivisor: number;       // 体积重量除数 (如 5000, 6000 等, 0 表示不适用)
@@ -94,6 +96,7 @@ export interface CalculationInput {
   exchangeRate: number; // 汇率：1 CNY = X RUB (例如 12.0，即1元人民币兑换12卢布)
   withdrawalFee: number; // 百分比
   exchangeRateBuffer: number; // 汇率安全缓冲百分比（默认0，用于规避结汇风险）
+  valueLimitCurrency: ValueLimitCurrency; // 物流货值限制口径
   
 // 经营模拟
   rivalPrice?: number; // 竞品售价

@@ -36,6 +36,7 @@ import { Slider } from "@/components/ui/slider";
 import { CalculationResult, CalculationInput, ShippingChannel } from "@/lib/types";
 import { calculateShippingCost } from "@/lib/data-hub-context";
 import { calculateExchangeRateStressTest, getCommissionRate, calculateMarginalContribution, calculateNetProfit, detectShippingDimensionLimits } from "@/lib/calculator";
+import { cnyToRub, rubToCny } from "@/lib/currency";
 import {
   PieChart,
   Pie,
@@ -156,7 +157,7 @@ export function Dashboard({
     if (customDropPercent === 0 || !commission) return result.netProfit;
     
     const newExchangeRate = input.exchangeRate * (1 - customDropPercent / 100);
-    const priceRUB = input.targetPriceRMB / input.exchangeRate;
+    const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
     
     // 获取新汇率下的佣金率
     const commissionRate = getCommissionRate(commission, priceRUB);
@@ -169,7 +170,7 @@ export function Dashboard({
     const totalFixedCost = result.costs.total - result.costs.commission - result.costs.withdrawalFee - result.costs.cpaCost;
     
     // 计算新利润
-    const newPriceRMB = priceRUB * newExchangeRate;
+    const newPriceRMB = rubToCny(priceRUB, newExchangeRate);
     return M > 0 ? calculateNetProfit(newPriceRMB, M, totalFixedCost) : -totalFixedCost;
   }, [customDropPercent, input, commission, result]);
 
@@ -365,7 +366,7 @@ export function Dashboard({
             </div>
             <div className="flex justify-between">
               <span className="text-blue-700">前台售价 (RUB):</span>
-              <span className="font-bold text-blue-900">{(input.targetPriceRMB / input.exchangeRate).toFixed(2)} ₽</span>
+              <span className="font-bold text-blue-900">{cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(2)} ₽</span>
             </div>
             <div className="flex justify-between">
               <span className="text-blue-700">当前佣金率:</span>
@@ -377,7 +378,7 @@ export function Dashboard({
                   <span className="text-blue-700">所属阶梯:</span>
                   <span className="font-medium text-blue-800">
                     {(() => {
-                      const priceRUB = input.targetPriceRMB / input.exchangeRate;
+                      const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
                       const matchedTier = commission.tiers.find(tier => priceRUB >= tier.min && priceRUB <= tier.max);
                       if (matchedTier) {
                         return `${matchedTier.min}-${matchedTier.max === Infinity ? '∞' : matchedTier.max} RUB`;
@@ -389,7 +390,7 @@ export function Dashboard({
                 <div className="mt-3 pt-2 border-t border-blue-300">
                   <div className="text-xs text-blue-700 mb-1">所有阶梯费率：</div>
                   {commission.tiers.map((tier, i) => {
-                    const priceRUB = input.targetPriceRMB / input.exchangeRate;
+                    const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
                     const isMatched = priceRUB >= tier.min && priceRUB <= tier.max;
                     return (
                       <div key={i} className={`flex justify-between text-xs ${isMatched ? 'font-bold text-blue-900' : 'text-blue-600'}`}>
@@ -570,9 +571,9 @@ export function Dashboard({
           ) : null}
 
           {/* 成本结构环形图 - 外围百分比常显 */}
-          <div className="h-64 flex items-center">
-            <div className="w-1/2 h-full">
-              <ResponsiveContainer width="100%" height="100%">
+          <div className="min-h-64 flex items-center">
+            <div className="w-1/2 h-64 min-w-0">
+              <ResponsiveContainer width="100%" height={240} minWidth={240}>
                 <PieChart>
                   <Pie
                     data={costChartData}
@@ -685,9 +686,9 @@ export function Dashboard({
           </div>
 
           {/* 利润演练折线图 - X轴RMB售价 */}
-          <div className="h-64 mb-4">
+          <div className="h-72 min-h-72 mb-4">
             <h4 className="text-sm font-medium mb-2">利润演练曲线</h4>
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height={240} minWidth={320}>
               <LineChart data={profitCurve}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis

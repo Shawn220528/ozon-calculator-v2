@@ -126,7 +126,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     key: 'valueRUB',
     label: '货值限制(卢布)',
     aliases: [
-      '货值限制/最低-最高（卢布）', '货值限制', '卢布', 'rub',
+      '货值限制/最低-最高（卢布）', '货值限制（卢布）', '货值限制卢布', '卢布', 'rub',
       'max value rub', 'max price rub', 'Макс. сумма заказа, ₽',
       '最大订单金额', 'Max price', '最大价格', '货值限制卢布'
     ],
@@ -138,7 +138,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     key: 'valueRMB',
     label: '货值限制(人民币)',
     aliases: [
-      '货值限制-人民币', '人民币', 'rmb', 'cny',
+      '货值限制/最低-最高（人民币）', '货值限制（人民币）', '货值限制-人民币', '货值限制人民币', '人民币', 'rmb', 'cny',
       'max value', 'max amount', 'макс сумма'
     ],
     type: 'price-range',

@@ -143,7 +143,7 @@ interface CalculationTraceProps {
     maxLength: number;
     maxSumDimension: number;
     minValueRUB?: number;
-    maxValueRUB: number;
+    maxValueRUB?: number;
     volumetricDivisor: number;
   };
   input: {
@@ -179,7 +179,7 @@ export function CalculationTrace({ channel, input, interceptionReasons, isAvaila
         <div className="pl-2 text-slate-600">
           最长边≤{channel.maxLength}cm, 总和≤{channel.maxSumDimension}cm, 
           重量{channel.minWeight}-{channel.maxWeight}g,
-          货值[{channel.minValueRUB || 0}-{channel.maxValueRUB}]₽
+          货值[{channel.minValueRUB ?? 0}-{channel.maxValueRUB ?? "无上限"}]₽
         </div>
       </div>
       
@@ -210,9 +210,11 @@ export function CalculationTrace({ channel, input, interceptionReasons, isAvaila
           )}
           
           {/* 货值上限 */}
-          <div className={input.priceRUB <= channel.maxValueRUB ? "text-green-600" : "text-red-600"}>
-            • 货值 {input.priceRUB}₽ ≤ {channel.maxValueRUB}₽ → {input.priceRUB <= channel.maxValueRUB ? "Pass" : "Fail: 货值超限"}
-          </div>
+          {channel.maxValueRUB !== undefined && (
+            <div className={input.priceRUB <= channel.maxValueRUB ? "text-green-600" : "text-red-600"}>
+              • 货值 {input.priceRUB}₽ ≤ {channel.maxValueRUB}₽ → {input.priceRUB <= channel.maxValueRUB ? "Pass" : "Fail: 货值超限"}
+            </div>
+          )}
         </div>
       </div>
       

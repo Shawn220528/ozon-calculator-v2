@@ -17,12 +17,13 @@
  * 终极公式：
  *   正向算利润：净利润(RMB) = P_rmb * M - Ftotal
  *   逆向算售价：P_rmb = (Ftotal + 目标利润) / M
- *               P_rub = P_rmb / E
+ *               P_rub = P_rmb × E
  *   佣金匹配：必须用 P_rub 去匹配 Ozon 三个阶梯
  */
 
 import { CalculationInput, CalculationResult, CategoryCommission, ShippingChannel, UnavailableShippingChannel } from "./types";
 import { calculateShippingCost, parseBillingWeight } from "./data-hub-context";
+import { cnyToRub, rubToCny } from "./currency";
 
 // 佣金阶梯边界常量（RUB）
 const TIER_BOUNDARIES = [
@@ -138,11 +139,11 @@ export function calculateCpcCost(
   cpcEnabled: boolean,
   cpcBid: number, // RUB
   cpcConversionRate: number, // 百分比
-  exchangeRate: number // RMB/RUB
+  exchangeRate: number // RUB/CNY
 ): number {
   if (!cpcEnabled || cpcConversionRate <= 0) return 0;
   const cvr = cpcConversionRate / 100;
-  return (cpcBid / cvr) * exchangeRate;
+  return rubToCny(cpcBid / cvr, exchangeRate);
 }
 
 /**
@@ -248,7 +249,7 @@ export function reversePriceFromMargin(
     lastPriceRMB = currentPriceRMB;
     
     // 用当前售价计算 P_rub 和佣金率
-    const priceRUB = currentPriceRMB / input.exchangeRate;
+    const priceRUB = cnyToRub(currentPriceRMB, input.exchangeRate);
     const commissionRate = getCommissionRate(commission, priceRUB);
     
     // 计算边际贡献率 M
@@ -289,7 +290,7 @@ export function reversePriceFromMargin(
   }
   
   // 3. 最终验证：新售价对应的佣金阶梯是否匹配
-  const finalPriceRUB = currentPriceRMB / input.exchangeRate;
+  const finalPriceRUB = cnyToRub(currentPriceRMB, input.exchangeRate);
   const finalCommissionRate = getCommissionRate(commission, finalPriceRUB);
   
   // 验证是否跨阶梯（如果跨阶梯，需要再迭代一次）
@@ -320,14 +321,14 @@ export function reversePriceFromMargin(
 
 /**
  * 验证逆向售价是否合法（落在对应佣金阶梯区间）
- * 使用 P_rub = P_rmb / E 去匹配阶梯
+ * 使用 P_rub = P_rmb × E 去匹配阶梯
  */
 export function validatePriceForTier(
   priceRMB: number,
   exchangeRate: number,
   commission: CategoryCommission
 ): { valid: boolean; tier: number; rate: number; priceRUB: number } {
-  const priceRUB = priceRMB / exchangeRate;
+  const priceRUB = cnyToRub(priceRMB, exchangeRate);
   for (let i = 0; i < commission.tiers.length; i++) {
     const tier = commission.tiers[i];
     if (priceRUB >= tier.min && priceRUB <= tier.max) {
@@ -394,7 +395,7 @@ export function calculateSixTierPricing(
   const totalFixedCost = purchaseCost + domesticShipping + packagingFee + internationalShipping + returnCost + cpcCost;
   
   // 🔹 安全校验：汇率和固定成本
-  const exchangeRate = parseFloat(String(input.exchangeRate)) || 0.082;
+  const exchangeRate = parseFloat(String(input.exchangeRate)) || 12;
   const fixedCost = parseFloat(String(totalFixedCost)) || 0;
   const withdrawalFee = parseFloat(String(input.withdrawalFee)) || 1.5;
   const cpaRate = input.cpaEnabled ? (parseFloat(String(input.cpaRate)) || 0) : 0;
@@ -415,7 +416,7 @@ export function calculateSixTierPricing(
       lastPriceRMB = currentPriceRMB;
       
       // 1. 根据当前售价计算 P_rub
-      const priceRUB = currentPriceRMB / exchangeRate;
+      const priceRUB = cnyToRub(currentPriceRMB, exchangeRate);
       
       // 2. 🔹 根据 P_rub 匹配佣金率（核心修复点）
       const commissionRate = getCommissionRate(commission, priceRUB);
@@ -456,7 +457,7 @@ export function calculateSixTierPricing(
     
     if (converged && isFinite(currentPriceRMB) && currentPriceRMB > 0) {
       finalPriceRMB = parseFloat(currentPriceRMB.toFixed(2));
-      finalPriceRUB = parseFloat((finalPriceRMB / exchangeRate).toFixed(0));
+      finalPriceRUB = parseFloat(cnyToRub(finalPriceRMB, exchangeRate).toFixed(0));
       
       // 🔹 再次验证佣金匹配
       const verifyCommission = getCommissionRate(commission, finalPriceRUB);
@@ -495,7 +496,7 @@ export function calculateSixTierPricing(
  * 阶梯定价策略推演 (RMB主导模式)
  * 对每个阶梯佣金率分别代入逆向公式：
  *   P_rmb = (F_total + T) / M
- *   P_rub = P_rmb / E
+ *   P_rub = P_rmb × E
  * 若 P_rub 落回提取该佣金C时的阶梯区间，则为合法解
  * 返回的售价全部为 RMB
  */
@@ -538,7 +539,7 @@ export function calculatePricingStrategies(
       // 逆向求 P_rmb
       const P_rmb = (totalFixedCost + targetProfit) / M;
       // 转换为 P_rub 验证是否在当前阶梯区间
-      const P_rub = P_rmb / exchangeRate;
+      const P_rub = cnyToRub(P_rmb, exchangeRate);
 
       if (P_rub >= tier.min && P_rub <= tier.max) {
         validPriceRMB = Math.min(validPriceRMB, P_rmb);
@@ -564,14 +565,14 @@ export function detectCommissionBlackHole(
   totalFixedCost: number,
   cpcCost: number
 ): string | null {
-  const priceRUB = priceRMB / exchangeRate;
+  const priceRUB = cnyToRub(priceRMB, exchangeRate);
   const currentRate = getCommissionRate(commission, priceRUB);
 
   for (const tier of commission.tiers) {
     if (tier.rate < currentRate) {
       // 将售价降到该阶梯的最大值（RUB），再转回 RMB
       const lowerPriceRUB = tier.max;
-      const lowerPriceRMB = lowerPriceRUB * exchangeRate;
+      const lowerPriceRMB = rubToCny(lowerPriceRUB, exchangeRate);
       const M_lower = calculateMarginalContribution(tier.rate, withdrawalFee, cpaRate);
       const M_current = calculateMarginalContribution(currentRate, withdrawalFee, cpaRate);
 
@@ -611,13 +612,13 @@ export function calculateExchangeRateStressTest(
 } {
   // 🔹 非空校验：确保参与运算的值均经过 parseFloat()
   const pRMB = parseFloat(String(priceRMB)) || 0;
-  const exRate = parseFloat(String(exchangeRate)) || 0.082;
+  const exRate = parseFloat(String(exchangeRate)) || 12;
   const wFee = parseFloat(String(withdrawalFee)) || 1.5;
   const cRate = parseFloat(String(cpaRate)) || 0;
   const fCost = parseFloat(String(totalFixedCost)) || 0;
   
   // 🔹 前台卢布售价（固定）
-  const priceRUB = exRate > 0 ? pRMB / exRate : 0;
+  const priceRUB = cnyToRub(pRMB, exRate);
   
   // 当前佣金率
   const currentCommissionRate = getCommissionRate(commission, priceRUB);
@@ -628,9 +629,9 @@ export function calculateExchangeRateStressTest(
     if (newExchangeRate <= 0) return -Infinity;
     
     // 新的 RMB 售价
-    const newPriceRMB = priceRUB * newExchangeRate;
+    const newPriceRMB = rubToCny(priceRUB, newExchangeRate);
     // 新的卢布售价（理论上不变，但佣金阶梯可能变化）
-    const newPriceRUB = newPriceRMB / newExchangeRate;
+    const newPriceRUB = cnyToRub(newPriceRMB, newExchangeRate);
     // 获取新的佣金率
     const newCommissionRate = getCommissionRate(commission, newPriceRUB);
     // 计算新的边际贡献率
@@ -655,15 +656,14 @@ export function calculateExchangeRateStressTest(
   
   if (currentM > 0 && priceRUB > 0 && currentProfit > 0) {
     // 在当前佣金阶梯下的 0 利润汇率
-    // 利润 = P_rub × E × M - F_total = 0
-    // E = F_total / (P_rub × M)
-    const denominator = priceRUB * currentM;
-    zeroProfitRate = denominator > 0 ? fCost / denominator : 0;
+    // 利润 = (P_rub / E) × M - F_total = 0
+    // E = P_rub × M / F_total
+    zeroProfitRate = fCost > 0 ? (priceRUB * currentM) / fCost : 0;
     
     // 验证该汇率对应的佣金阶梯是否一致
     if (zeroProfitRate > 0) {
-      const testPriceRMB = priceRUB * zeroProfitRate;
-      const testPriceRUB = testPriceRMB / zeroProfitRate;
+      const testPriceRMB = rubToCny(priceRUB, zeroProfitRate);
+      const testPriceRUB = cnyToRub(testPriceRMB, zeroProfitRate);
       const testCommissionRate = getCommissionRate(commission, testPriceRUB);
       
       if (testCommissionRate !== currentCommissionRate) {
@@ -721,7 +721,7 @@ export function calculateProfitCurve(
   totalFixedCost: number
 ): { priceRMB: number; priceRUB: number; profit: number; commissionRate: number }[] {
   return priceRangeRMB.map((priceRMB) => {
-    const priceRUB = priceRMB / exchangeRate;
+    const priceRUB = cnyToRub(priceRMB, exchangeRate);
     const rate = getCommissionRate(commission, priceRUB);
     const M = calculateMarginalContribution(rate, withdrawalFee, cpaRate);
     const profit = M > 0 ? calculateNetProfit(priceRMB, M, totalFixedCost) : -totalFixedCost;
@@ -757,7 +757,7 @@ export function calculateMultiItemProfit(
 
   const totalFixedCost = input.purchaseCost + input.domesticShipping + input.packagingFee + shippingPerItem + cpcCost + returnCost;
 
-  const priceRUB = input.targetPriceRMB / input.exchangeRate;
+  const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
   const commissionRate = getCommissionRate(commission, priceRUB);
   const M = calculateMarginalContribution(commissionRate, input.withdrawalFee, input.cpaEnabled ? input.cpaRate : 0);
 
@@ -852,7 +852,7 @@ export function calculateBreakEvenACOS(
 export function calculateCVRsensitivity(
   currentCVR: number, // 当前转化率 (%)
   cpcBid: number, // 单次竞价 (RUB)
-  exchangeRate: number, // 汇率 RMB/RUB
+  exchangeRate: number, // RUB/CNY
   currentProfit: number, // 当前净利润 (RMB)
   priceRMB: number // 售价 (RMB)
 ): {
@@ -871,11 +871,11 @@ export function calculateCVRsensitivity(
   }
   
   // 当前单均转化成本
-  const currentCost = (cpcBid / (currentCVR / 100)) * exchangeRate;
+  const currentCost = rubToCny(cpcBid / (currentCVR / 100), exchangeRate);
   
   // CVR 提升 1% 后的成本
   const newCVR = currentCVR + 1;
-  const newCost = (cpcBid / (newCVR / 100)) * exchangeRate;
+  const newCost = rubToCny(cpcBid / (newCVR / 100), exchangeRate);
   
   // 成本下降
   const costReduction = currentCost - newCost;
@@ -926,7 +926,7 @@ export function detectCommissionTierBoundary(
     if (priceRUB >= lowerBound && priceRUB <= upperBound) {
       // 当前售价在边界附近，计算降价到边界以下的利润
       const targetPriceRUB = boundary - 1; // 降到边界以下 1 RUB
-      const targetPriceRMB = targetPriceRUB * exchangeRate;
+      const targetPriceRMB = rubToCny(targetPriceRUB, exchangeRate);
       
       // 计算降价后的佣金率
       const lowerCommissionRate = getCommissionRate(commission, targetPriceRUB);
@@ -939,7 +939,7 @@ export function detectCommissionTierBoundary(
         
         if (M_lower > 0 && M_current > 0) {
           const profitLower = calculateNetProfit(targetPriceRMB, M_lower, totalFixedCost);
-          const currentPriceRMB = priceRUB * exchangeRate;
+          const currentPriceRMB = rubToCny(priceRUB, exchangeRate);
           const profitCurrent = calculateNetProfit(currentPriceRMB, M_current, totalFixedCost);
           
           if (profitLower > profitCurrent) {
@@ -1152,7 +1152,7 @@ export function performFullCalculation(
 
   // ===== 核心变更：用 P_rmb 算出 P_rub，再用 P_rub 匹配佣金 =====
   const priceRMB = input.targetPriceRMB;
-  const priceRUB = priceRMB / input.exchangeRate;
+  const priceRUB = cnyToRub(priceRMB, input.exchangeRate);
   
   const commissionRate = getCommissionRate(activeCommission, priceRUB);
   
@@ -1361,7 +1361,8 @@ const DEFAULT_SHIPPING_DATA: ShippingChannel[] = [
  */
 export function calculateSuggestedPrice(
   unavailableChannels: UnavailableShippingChannel[],
-  exchangeRate: number // RMB/RUB (1 RUB = exchangeRate RMB)
+  exchangeRate: number, // RUB/CNY
+  valueLimitCurrency: "RMB" | "RUB" = "RMB"
 ): {
   suggestedPriceRMB: number;       // 建议最低售价(RMB)
   suggestedPriceRUB: number;       // 建议最低售价(RUB)
@@ -1385,12 +1386,16 @@ export function calculateSuggestedPrice(
     
     if (hasPriceReason && !hasOtherReason) {
       // 仅因货值被拦截 → 可通过调价修复
-      const minValueRUB = ch.minValueRUB || 0;
-      if (minValueRUB > 0) {
+      const minPriceRMB =
+        valueLimitCurrency === "RMB"
+          ? ch.minValue || (ch.minValueRUB ? rubToCny(ch.minValueRUB, exchangeRate) : 0)
+          : ch.minValueRUB ? rubToCny(ch.minValueRUB, exchangeRate) : ch.minValue || 0;
+      const minValueRUB = ch.minValueRUB || cnyToRub(minPriceRMB, exchangeRate);
+      if (minPriceRMB > 0) {
         fixableChannels.push({
           channelName: ch.name,
           minValueRUB,
-          minPriceRMB: minValueRUB * exchangeRate, // RUB → RMB
+          minPriceRMB,
         });
       }
     } else if (hasOtherReason) {

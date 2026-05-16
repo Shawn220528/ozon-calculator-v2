@@ -31,9 +31,6 @@ import { CalculationInput, ShippingChannel } from "@/lib/types";
  * 方向 A: 人民币 ➔ 卢布 (CNY → RUB): val * exchangeRate
  * 方向 B: 卢布 ➔ 人民币 (RUB → CNY): val / exchangeRate
  * 
- * ⚠️ 内部计算引擎使用 effectiveExchangeRate = 1/exchangeRate (RMB/RUB)
- *    这是为了计算引擎的数学一致性，用户界面始终使用 exchangeRate
- * 
  * 禁止: 任何反向逻辑 (如 val / exchangeRate 用于 CNY→RUB)
  * ========================================================
  */
@@ -606,7 +603,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 <Input
                   type="number"
                   min="0"
-                  step="0.01"
+                  step="1"
                   value={input.targetPriceRMB || ""}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -617,7 +614,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                     }
                   }}
                   className="h-9 text-sm pl-6"
-                  placeholder="0.00"
+                  placeholder="0"
                 />
               </div>
               {/* 💡 智能售价建议标签 */}
@@ -833,7 +830,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               <div className="text-xs text-muted-foreground p-2 rounded-md bg-muted/30">
                 <span className="font-medium">划线原价:</span>{" "}
                 ¥{(input.targetPriceRMB / (1 - input.promotionDiscount / 100)).toFixed(2)}
-                {" "}(≈{(input.targetPriceRMB / (1 - input.promotionDiscount / 100) / input.exchangeRate).toFixed(0)} ₽)
+                {" "}(≈{(input.targetPriceRMB / (1 - input.promotionDiscount / 100) * input.exchangeRate).toFixed(0)} ₽)
               </div>
             )}
           </div>

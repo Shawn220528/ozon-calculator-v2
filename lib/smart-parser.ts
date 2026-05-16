@@ -59,14 +59,15 @@ export const LOGISTICS_SCHEMA: LogisticsSchemaField[] = [
   { key: 'rate', label: '费率', type: 'string', required: true, aliases: ['费率', 'rate', '费用', '运费', '费率（PUDO揽收点揽收'] },
 
   // --- 拦截限制项 (深度参与筛选，用户可开关) ---
-  { key: 'ozonRating', label: 'Ozon评级', type: 'number', required: false, interceptor: true, aliases: ['Ozon评级', 'Rating', '评分', 'Ozon'] },
+  { key: 'rating', label: 'Ozon评级', type: 'number', required: false, interceptor: true, aliases: ['Ozon评级', 'Rating', '评分', 'Ozon'] },
   { key: 'deliveryTime', label: '时效 (天)', type: 'string', required: false, interceptor: true, aliases: ['时效限制', '时效', 'delivery time', '天'] },
   { key: 'minWeight', label: '最小实重 (g)', type: 'number', required: false, interceptor: true, aliases: ['货件重量限制 / 最小', '最小重量', 'min weight', '最小（克）'] },
   { key: 'maxWeight', label: '最大实重 (g)', type: 'number', required: false, interceptor: true, aliases: ['货件重量限制 / 最大', '最大重量', 'max weight', '最大（克）'] },
-  { key: 'sizeConstraints', label: '尺寸限制', type: 'string', required: false, interceptor: true, aliases: ['尺寸限制', 'dimensions', '最大（厘米）', '边长总和'] },
-  { key: 'maxValueRUB', label: '最大货值 (₽)', type: 'number', required: false, interceptor: true, aliases: ['货值限制/最低-最高（卢布）', '货值限制', 'max value', '卢布'] },
-  { key: 'batteryAllowed', label: '电池', type: 'boolean', required: false, interceptor: true, aliases: ['电池', 'battery'] },
-  { key: 'liquidAllowed', label: '液体', type: 'boolean', required: false, interceptor: true, aliases: ['液体', 'liquid'] },
+  { key: 'dimension', label: '尺寸限制', type: 'string', required: false, interceptor: true, aliases: ['尺寸限制', '尺寸限制，最大（厘米）', 'dimensions', '最大（厘米）', '边长总和'] },
+  { key: 'valueRUB', label: '货值限制(卢布)', type: 'string', required: false, interceptor: true, aliases: ['货值限制/最低-最高（卢布）', '货值限制卢布', '卢布', 'rub', 'max value rub'] },
+  { key: 'valueRMB', label: '货值限制(人民币)', type: 'string', required: false, interceptor: true, aliases: ['货值限制/最低-最高（人民币）', '货值限制人民币', '货值限制-人民币', '人民币', 'rmb', 'cny'] },
+  { key: 'battery', label: '电池', type: 'boolean', required: false, interceptor: true, aliases: ['电池', 'battery'] },
+  { key: 'liquid', label: '液体', type: 'boolean', required: false, interceptor: true, aliases: ['液体', 'liquid'] },
   
   // --- 计费与可选字段 ---
   { key: 'billingType', label: '计费类型', type: 'string', required: false, aliases: ['计费类型', 'billing', '实际重量'] },
@@ -278,24 +279,28 @@ const SHIPPING_SYNONYMS: SynonymBank = {
     "delivery time", "shipping time", "transit time"
   ],
   // 🔹 新增：尺寸限制约束字段
-  sizeConstraints: [
+  dimension: [
     "尺寸限制", "最大尺寸", "边长总和", "尺寸约束",
     "dimensions", "size limit", "dimension limit", "size constraints",
     "体积限制", "包装限制"
   ],
   // 🔹 新增：电池和液体属性字段
-  batteryAllowed: [
+  battery: [
     "电池", "是否带电", "电池限制", "电池属性",
     "battery", "battery allowed", "battery limit"
   ],
-  liquidAllowed: [
+  liquid: [
     "液体", "是否带液体", "液体限制", "液体属性",
     "liquid", "liquid allowed", "liquid limit"
   ],
   // 🔹 新增：货值限制字段
-  maxValueRUB: [
-    "货值限制", "最大货值", "货值上限", "货值限制（卢布）",
-    "max value", "value limit", "max value rub"
+  valueRUB: [
+    "货值限制/最低-最高（卢布）", "货值限制卢布", "货值限制（卢布）", "卢布",
+    "max value rub", "value rub", "rub"
+  ],
+  valueRMB: [
+    "货值限制/最低-最高（人民币）", "货值限制人民币", "货值限制-人民币", "人民币",
+    "max value rmb", "value rmb", "cny", "rmb"
   ],
 };
 
@@ -498,7 +503,7 @@ export function smartParseCSV(
     let parsedConstraints: Map<string, SizeConstraints> | undefined;
     
     if (type === "shipping") {
-      const sizeMapping = mappings.find(m => m.systemField === "sizeConstraints");
+      const sizeMapping = mappings.find(m => m.systemField === "dimension");
       
       if (sizeMapping && sizeMapping.columnIndex >= 0) {
         parsedConstraints = new Map();

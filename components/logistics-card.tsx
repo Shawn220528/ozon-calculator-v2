@@ -30,9 +30,13 @@ const fDim = (v: number | undefined | null): string => {
   return `≤${v}`;
 };
 
-const fPrice = (v: number | undefined | null): string => {
-  if (v === undefined || v === null || v === Infinity) return '无上限';
-  return Math.round(v).toLocaleString();
+const hasRealLimitValue = (v: number | undefined | null): v is number => {
+  return v !== undefined && v !== null && v !== Infinity && v < 999999;
+};
+
+const fPrice = (v: number | undefined | null, currency: "RMB" | "RUB"): string => {
+  if (!hasRealLimitValue(v)) return "";
+  return currency === "RMB" ? v.toFixed(2) : Math.round(v).toLocaleString();
 };
 
 export function LogisticsCard({ channel, cost, billing, isSelected, onClick, input, isFavorite = false, onToggleFavorite }: LogisticsCardProps) {
@@ -71,17 +75,25 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
   };
 
   // 从 channel 提取 limits 数据（兼容新旧数据结构）
+  const valueLimitCurrency = input.valueLimitCurrency || "RMB";
   const limits = {
     minWt: channel.minWeight || 0,
     maxWt: channel.maxWeight || Infinity,
     maxSide: channel.maxLength || Infinity, // 近似最长边
     maxSum: channel.maxSumDimension || Infinity,
-    minPrice: channel.minValueRUB || 0,     // 货值下限
-    maxPrice: channel.maxValueRUB || Infinity, // 货值上限
+    minPrice: valueLimitCurrency === "RMB" ? channel.minValue : channel.minValueRUB,
+    maxPrice: valueLimitCurrency === "RMB" ? channel.maxValue : channel.maxValueRUB,
     maxVolWt: billing?.divisor || 12000,
     allowBattery: channel.batteryAllowed !== false,
     allowLiquid: channel.liquidAllowed !== false,
   };
+  const valueSymbol = valueLimitCurrency === "RMB" ? "¥" : "₽";
+  const minValueLabel = hasRealLimitValue(limits.minPrice)
+    ? `${valueSymbol}${fPrice(limits.minPrice, valueLimitCurrency)}`
+    : "无下限";
+  const maxValueLabel = hasRealLimitValue(limits.maxPrice)
+    ? `${valueSymbol}${fPrice(limits.maxPrice, valueLimitCurrency)}`
+    : "无上限";
 
   return (
     <div 
@@ -184,7 +196,10 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
           <span className="opacity-70">📐 三边和:</span> <b className="text-foreground">{fDim(limits.maxSum)}cm</b>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          <span className="opacity-70">💰 货值:</span> <b className="text-foreground">{fPrice(limits.minPrice)}-{fPrice(limits.maxPrice)}₽</b>
+          <span className="opacity-70">💰 货值:</span>{" "}
+          <b className="text-foreground">
+            {minValueLabel}-{maxValueLabel}
+          </b>
         </div>
       </div>
 
@@ -241,7 +256,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
               length: input.length,
               width: input.width,
               height: input.height,
-              priceRUB: input.targetPriceRMB / input.exchangeRate,
+              priceRUB: input.targetPriceRMB * input.exchangeRate,
             }}
             interceptionReasons={[]}
             isAvailable={true}

@@ -12,6 +12,8 @@ import {
 } from "./column-keywords";
 import { DEFAULT_COMMISSION_DATA, DEFAULT_SHIPPING_DATA } from "./default-data";
 import { buildColumnMapping, getFieldSchema, LOGISTICS_FIELDS } from "./constants";
+import { cnyToRub } from "./currency";
+import type { ValueLimitCurrency } from "./currency";
 
 // 佣金阶梯金额边界
 const TIER_BOUNDARIES = [
@@ -34,7 +36,7 @@ interface DataHubContextType {
   columnMapping: ColumnMapping;
   interceptionConfig: Record<string, boolean>; // 🔹 拦截配置
   loadCommissionData: (file: File, mode?: "overwrite" | "merge") => Promise<void>;
-  loadShippingData: (file: File, mode?: "overwrite" | "merge") => Promise<void>;
+  loadShippingData: (file: File, mode?: "overwrite" | "merge", mappingOverride?: Record<string, number>) => Promise<void>;
   clearCommissionData: () => void;
   clearShippingData: () => void;
   updateColumnMapping: (type: "commission" | "shipping", mapping: Record<string, number>) => void;
@@ -46,8 +48,9 @@ interface DataHubContextType {
     width: number,
     height: number,
     weight: number,
-    priceRUB: number,
-    exchangeRate: number,
+    priceRMB: number,
+    rubPerCny: number,
+    valueLimitCurrency?: ValueLimitCurrency,
     hasBattery?: boolean,
     hasLiquid?: boolean,
     designatedProvider?: string
@@ -59,6 +62,12 @@ const DataHubContext = createContext<DataHubContextType | undefined>(undefined);
 // ========================================================
 // 工具函数
 // ========================================================
+const normalizeLimitValue = (value: number | undefined): number | undefined => {
+  if (value === undefined || value === null || !Number.isFinite(value) || value >= 999999) {
+    return undefined;
+  }
+  return value;
+};
 
 /**
  * 安全写入 localStorage（含容量保护）
@@ -380,9 +389,9 @@ function parseDimensionString(dimStr: string): { maxSum: number; maxLength: numb
  * 格式示例: "1 - 1500", "0.01 - 135", "1 501 - 7,000" (带千分位空格)
  * 返回 { min, max }
  */
-function parseValueRange(valStr: string): { min: number; max: number } {
+function parseValueRange(valStr: string): { min: number; max: number; hasLimit: boolean } {
   if (!valStr || valStr.trim() === "" || valStr.trim() === "-") {
-    return { min: 0, max: 999999 };
+    return { min: 0, max: 0, hasLimit: false };
   }
 
   // 🔹 关键修复：先移除所有空格和逗号（处理 Ozon 千分位格式 "1 501 - 7,000"）
@@ -390,15 +399,15 @@ function parseValueRange(valStr: string): { min: number; max: number } {
 
   const match = cleanStr.match(/([\d.]+)\s*[-–—]\s*([\d.]+)/);
   if (match) {
-    return { min: parseFloat(match[1]), max: parseFloat(match[2]) };
+    return { min: parseFloat(match[1]), max: parseFloat(match[2]), hasLimit: true };
   }
 
   const singleNum = cleanStr.match(/([\d.]+)/);
   if (singleNum) {
-    return { min: 0, max: parseFloat(singleNum[1]) };
+    return { min: 0, max: parseFloat(singleNum[1]), hasLimit: true };
   }
 
-  return { min: 0, max: 999999 };
+  return { min: 0, max: 0, hasLimit: false };
 }
 
 /**
@@ -471,7 +480,7 @@ function generateShippingUniqueId(name: string, serviceLevel: string): string {
 
 /**
  * 解析时效限制字符串
- * 格式示例: "5-14" 或 "3-8"
+ * 格式示例: "5-14"、"5月14日"、"2026/5/14"、"5/14/2026"
  * 返回 { min, max }
  */
 function parseDeliveryTime(timeStr: string): { min: number; max: number } {
@@ -479,14 +488,54 @@ function parseDeliveryTime(timeStr: string): { min: number; max: number } {
     return { min: 20, max: 40 };
   }
 
-  const match = timeStr.match(/(\d+)\s*[-–—]\s*(\d+)/);
-  if (match) {
-    return { min: parseInt(match[1]), max: parseInt(match[2]) };
+  const normalizeRange = (a: number, b: number): { min: number; max: number } => {
+    const min = Math.min(a, b);
+    const max = Math.max(a, b);
+    if (min > 0 && max <= 120) {
+      return { min, max };
+    }
+    return { min: 20, max: 40 };
+  };
+
+  const value = String(timeStr).trim();
+
+  // Spreadsheet date coercion: "2026/5/14", "2026-05-14", "5/14/2026".
+  // This must run before generic range matching, otherwise "2026-05-14"
+  // can be misread as "26-05".
+  const dateTokens = value.match(/\d+/g)?.map((token) => parseInt(token, 10)) || [];
+  if (dateTokens.length >= 3) {
+    const [first, second, third] = dateTokens;
+    if (first >= 1900 && second >= 1 && second <= 120 && third >= 1 && third <= 120) {
+      return normalizeRange(second, third);
+    }
+    if ((third >= 1900 || third <= 99) && first >= 1 && first <= 120 && second >= 1 && second <= 120) {
+      return normalizeRange(first, second);
+    }
   }
 
-  const singleNum = timeStr.match(/(\d+)/);
+  // Normal range text: "5-14", "5–14", "5 ~ 14", "5 到 14 天".
+  const rangeMatch = value.match(/(\d{1,3})\s*(?:[-–—~至到]|\.{2})\s*(\d{1,3})/);
+  if (rangeMatch) {
+    return normalizeRange(parseInt(rangeMatch[1], 10), parseInt(rangeMatch[2], 10));
+  }
+
+  // Excel/locale date text that actually means a day range: "5月14日".
+  const chineseDateLike = value.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|号)?/);
+  if (chineseDateLike) {
+    return normalizeRange(parseInt(chineseDateLike[1], 10), parseInt(chineseDateLike[2], 10));
+  }
+
+  // Slash/dot date without year: "5/14", "5.14".
+  if (dateTokens.length === 2 && /[/.]/.test(value)) {
+    return normalizeRange(dateTokens[0], dateTokens[1]);
+  }
+
+  const singleNum = value.match(/(\d{1,3})/);
   if (singleNum) {
-    return { min: parseInt(singleNum[1]), max: parseInt(singleNum[1]) };
+    const days = parseInt(singleNum[1], 10);
+    if (days > 0 && days <= 120) {
+      return { min: days, max: days };
+    }
   }
 
   return { min: 20, max: 40 };
@@ -710,7 +759,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
    * @param file 上传的文件
    * @param mode 加载模式：overwrite（覆盖，默认）或 merge（并存更新）
    */
-  const loadShippingData = useCallback(async (file: File, mode: "overwrite" | "merge" = "overwrite") => {
+  const loadShippingData = useCallback(async (file: File, mode: "overwrite" | "merge" = "overwrite", mappingOverride?: Record<string, number>) => {
     return new Promise<void>((resolve, reject) => {
       const ext = file.name.split(".").pop()?.toLowerCase();
 
@@ -728,7 +777,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         const dataRows = rawRows.slice(headerIdx + 1);
 
         // 🔴 重构：使用 Schema Registry 进行列映射（零硬编码）
-        const colMap = buildColumnMapping(headers);
+        const colMap = mappingOverride ?? buildColumnMapping(headers);
         
         // 兼容性映射：将 registry key 映射到原有变量名
         const fieldMapping = {
@@ -817,10 +866,10 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               deliveryTimeMin: dmin,
               deliveryTimeMax: dmax,
               deliveryTime: Math.round((dmin + dmax) / 2),
-              minValueRUB: valRUB.min > 0 ? valRUB.min : undefined,  // 🔴 关键修复：添加最小货值
-              maxValueRUB: valRUB.max,
-              minValue: valRMB.min > 0 ? valRMB.min : undefined,
-              maxValue: valRMB.max,
+              minValueRUB: valRUB.hasLimit && valRUB.min > 0 ? valRUB.min : undefined,
+              maxValueRUB: valRUB.hasLimit ? valRUB.max : undefined,
+              minValue: valRMB.hasLimit && valRMB.min > 0 ? valRMB.min : undefined,
+              maxValue: valRMB.hasLimit ? valRMB.max : undefined,
               billingType,
               volumetricDivisor: volDivisor,  // 🔴 关键修复：从CSV解析除数
               ozonRating: fieldMapping.rating >= 0 ? parseFloat(row[fieldMapping.rating]) || 0 : 0,
@@ -1058,13 +1107,14 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
       width: number,
       height: number,
       weight: number,
-      priceRUB: number,
-      exchangeRate: number,
+      priceRMB: number,
+      rubPerCny: number,
+      valueLimitCurrency: ValueLimitCurrency = "RMB",
       hasBattery: boolean = false, // 🔹 是否带电
       hasLiquid: boolean = false, // 🔹 是否带液体
       designatedProvider: string = "" // 🔹 指定物流商过滤
     ) => {
-      const priceRMB = priceRUB * exchangeRate;
+      const priceRUB = cnyToRub(priceRMB, rubPerCny);
       
       // 🔹 关键：排序尺寸 - 包裹可以旋转，比较最长边
       const productDims = [length, width, height].sort((a, b) => b - a);
@@ -1101,43 +1151,48 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         
         // ========== 六维绝对拦截引擎（读取 interceptionConfig 判断是否启用） ==========
         
-        // 维度一：货值拦截 (Value Limit) - 仅当渠道有明确的货值限制时
-        // 只有当渠道真正设置了 minValueRUB 或 maxValueRUB 时才拦截
-        const hasValueLimit = channel.minValueRUB !== undefined || channel.maxValueRUB !== undefined;
-        const effectiveMaxValueRUB = channel.maxValueRUB ?? channel.maxValue ? Math.max(channel.maxValueRUB || 0, (channel.maxValue || 0) * exchangeRate) : 0;
-        
-        if (hasValueLimit && effectiveMaxValueRUB > 0) {
-          const channelMinValueRMB = channel.minValueRUB ? channel.minValueRUB * exchangeRate : 0;
-          const channelMaxValueRMB = effectiveMaxValueRUB * exchangeRate;
-          
-          // 检查货值下限（评分组匹配）- 需要同时满足上下限才校验
-          if (channel.minValueRUB && channel.maxValueRUB && (priceRUB < channel.minValueRUB || priceRUB > channel.maxValueRUB)) {
-            reasons.push(`❌ 货值不符: ${Math.round(priceRUB)}₽ 不在 ${channel.minValueRUB}-${channel.maxValueRUB}₽ 范围`);
+        // 维度一：货值拦截 (Value Limit)
+        const rmbLimit = {
+          currency: "RMB" as const,
+          min: normalizeLimitValue(channel.minValue),
+          max: normalizeLimitValue(channel.maxValue),
+          price: priceRMB,
+          symbol: "¥",
+        };
+        const rubLimit = {
+          currency: "RUB" as const,
+          min: normalizeLimitValue(channel.minValueRUB),
+          max: normalizeLimitValue(channel.maxValueRUB),
+          price: priceRUB,
+          symbol: "₽",
+        };
+        const preferredLimit = valueLimitCurrency === "RMB" ? rmbLimit : rubLimit;
+        const fallbackLimit = valueLimitCurrency === "RMB" ? rubLimit : rmbLimit;
+        const activeLimit =
+          preferredLimit.min !== undefined || preferredLimit.max !== undefined
+            ? preferredLimit
+            : fallbackLimit.min !== undefined || fallbackLimit.max !== undefined
+              ? fallbackLimit
+              : null;
+
+        if (activeLimit) {
+          const min = activeLimit.min;
+          const max = activeLimit.max;
+          const current = activeLimit.price;
+          const unit = activeLimit.symbol;
+          const usedFallback = activeLimit.currency !== valueLimitCurrency;
+          const fallbackText = usedFallback ? "（所选口径缺失，使用备用货值口径）" : "";
+          const rangeText = `${min !== undefined ? `${unit}${min}` : "无下限"}-${max !== undefined ? `${unit}${max}` : "无上限"}`;
+
+          if ((min !== undefined && current < min) || (max !== undefined && current > max)) {
+            const code = min !== undefined && current < min ? "VALUE_TOO_LOW" : "VALUE_LIMIT";
+            const message = min !== undefined && current < min ? "商品售价低于渠道货值下限" : "商品售价超出渠道货值上限";
+            reasons.push(`❌ 货值不符: ${unit}${current.toFixed(activeLimit.currency === "RMB" ? 2 : 0)} 不在 ${rangeText} 范围${fallbackText}`);
             interceptionReasons.push({
               dimension: "货值",
-              code: "VALUE_TOO_LOW",
-              message: `商品售价不在渠道货值范围内`,
-              details: `当前 ${priceRUB.toFixed(0)}₽ 不在 ${channel.minValueRUB}-${channel.maxValueRUB}₽ 范围内`
-            });
-          }
-          // 仅检查上限（当没有下限时）
-          else if (!channel.minValueRUB && channel.maxValueRUB && priceRUB > channel.maxValueRUB) {
-            reasons.push(`🚫 货值超限: ${Math.round(priceRUB)}₽ > ${channel.maxValueRUB}₽`);
-            interceptionReasons.push({
-              dimension: "货值",
-              code: "VALUE_LIMIT",
-              message: `商品售价超出渠道货值上限`,
-              details: `商品 ${priceRUB.toFixed(0)}₽ > 渠道 ${channel.maxValueRUB}₽`
-            });
-          }
-          // 仅检查下限（当没有上限时）  
-          else if (channel.minValueRUB && !channel.maxValueRUB && priceRUB < channel.minValueRUB) {
-            reasons.push(`❌ 货值不足: ${Math.round(priceRUB)}₽ < ${channel.minValueRUB}��`);
-            interceptionReasons.push({
-              dimension: "货值",
-              code: "VALUE_TOO_LOW",
-              message: `商品售价低于渠道货值下限`,
-              details: `商品 ${priceRUB.toFixed(0)}₽ < 渠道 ${channel.minValueRUB}₽`
+              code,
+              message,
+              details: `当前 ${unit}${current.toFixed(activeLimit.currency === "RMB" ? 2 : 0)} 不在 ${rangeText} 范围内${fallbackText}`
             });
           }
         }

@@ -36,6 +36,7 @@ import {
 import { calculateShippingCost, parseBillingWeight, getBillingModeDescription } from "@/lib/data-hub-context";
 import { PreviewMappingDialog } from "@/components/preview-mapping-dialog";
 import { FieldMapping, ParsedData, smartParseCSV } from "@/lib/smart-parser";
+import { cnyToRub, rubToCny } from "@/lib/currency";
 
 // 默认输入：售价为 RMB（1500 RUB ÷ 12 = 125 RMB）
 const DEFAULT_INPUT: CalculationInput = {
@@ -63,6 +64,7 @@ const DEFAULT_INPUT: CalculationInput = {
   exchangeRate: 12.0, // 1 CNY = 12 RUB
   withdrawalFee: 1.5,
   exchangeRateBuffer: 0, // 汇率安全缓冲：默认0%
+  valueLimitCurrency: "RMB",
   rivalPrice: 0, // 竞品售价
   rivalCurrency: 'RMB' as const, // 竞品售价货币模式
   multiItemCount: 1, // 单单购买数量
@@ -232,7 +234,7 @@ function importConfig(onSuccess: () => void, onError: (err: string) => void) {
 }
 
 export default function Home() {
-  const { getCommissionByCategory, getShippingChannels, shippingData, clearCommissionData, clearShippingData, loadCommissionData, loadShippingData, updateInterceptionConfig } = useDataHub();
+  const { getCommissionByCategory, getShippingChannels, shippingData, clearCommissionData, clearShippingData, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig } = useDataHub();
   const [input, setInput] = useState<CalculationInput>(DEFAULT_INPUT);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [marginError, setMarginError] = useState<string | null>(null);
@@ -347,7 +349,7 @@ export default function Home() {
       const savedData = localStorage.getItem(STORAGE_KEY);
       if (savedData) {
         const parsedData = JSON.parse(savedData) as CalculationInput;
-        setInput(parsedData);
+        setInput({ ...DEFAULT_INPUT, ...parsedData, valueLimitCurrency: parsedData.valueLimitCurrency || "RMB" });
       }
       
       // 🔹 恢复锁定的物流商
@@ -407,15 +409,13 @@ export default function Home() {
     [input.primaryCategory, input.secondaryCategory]
   );
 
-  // 🔹 计算实际汇率（扣除安全缓冲）
-  const effectiveExchangeRate = useMemo(() => {
+  // 🔹 计算实际汇率（扣除安全缓冲），单位固定为 1 CNY = X RUB
+  const effectiveRubPerCny = useMemo(() => {
     // 用户输入表示: 1 CNY = X RUB
-    // 转换为程序内部表示: 1 RUB = (1/X) RMB
-    // 🔴 修复：启用汇率安全缓冲时，实际汇率应更低（规避结汇风险）
     // buffer > 0 时，实际汇率 = 原汇率 × (1 - buffer/100)
     const bufferMultiplier = 1 - (input.exchangeRateBuffer || 0) / 100;
     const adjustedRate = input.exchangeRate * Math.max(bufferMultiplier, 0.5); // 最低保护50%
-    return adjustedRate > 0 ? 1 / adjustedRate : 0.082;
+    return adjustedRate > 0 ? adjustedRate : 12;
   }, [input.exchangeRate, input.exchangeRateBuffer]);
 
   // 获取可用物流渠道 — 需要将 RMB 转为 RUB 传入（使用实际汇率）
@@ -424,7 +424,6 @@ export default function Home() {
   const providers = selectedProviders.filter(p => p && p !== "__favorites__");
   
   const baseShippingChannels = useMemo(() => {
-    const priceRUB = effectiveExchangeRate > 0 ? input.targetPriceRMB / effectiveExchangeRate : 0;
     // 转换为逗号分隔的字符串（空表示全部）
     const providerStr = providers.length > 0 ? providers.join(",") : "";
     return getShippingChannels(
@@ -432,13 +431,14 @@ export default function Home() {
       input.width,
       input.height,
       input.weight,
-      priceRUB,
-      effectiveExchangeRate,
+      input.targetPriceRMB,
+      effectiveRubPerCny,
+      input.valueLimitCurrency,
       input.hasBattery, // 🔹 传入是否带电
       input.hasLiquid, // 🔹 传入是否带液体
       providerStr // 🔹 使用物流商筛选
     );
-  }, [input.length, input.width, input.height, input.weight, input.targetPriceRMB, effectiveExchangeRate, input.hasBattery, input.hasLiquid, providers]);
+  }, [input.length, input.width, input.height, input.weight, input.targetPriceRMB, effectiveRubPerCny, input.valueLimitCurrency, input.hasBattery, input.hasLiquid, providers, getShippingChannels]);
   
   // 🔹 应用收藏夹筛选
   const shippingChannels = useMemo(() => {
@@ -460,8 +460,8 @@ export default function Home() {
       return null;
     }
     // 使用 input.exchangeRate (1 CNY = X RUB) 作为 RMB→RUB 转换因子
-    return calculateSuggestedPrice(shippingChannels.unavailable, input.exchangeRate);
-  }, [shippingChannels, input.targetPriceRMB, input.weight, input.exchangeRate]);
+    return calculateSuggestedPrice(shippingChannels.unavailable, effectiveRubPerCny, input.valueLimitCurrency);
+  }, [shippingChannels, input.targetPriceRMB, input.weight, effectiveRubPerCny, input.valueLimitCurrency]);
 
   // 🔹 推荐物流排序：按费用/时效/评分排序（定义在 channelCosts 之后，见下方）
 
@@ -480,13 +480,13 @@ export default function Home() {
     return shippingChannels.available[0] || null;
   }, [selectedChannelId, shippingChannels.available, lockedChannelId]);
 
-  // 🔹 创建计算用的 input（使用实际汇率）
+  // 🔹 创建计算用的 input（使用实际 RUB/CNY 汇率）
   const effectiveInput = useMemo(() => {
     return {
       ...input,
-      exchangeRate: effectiveExchangeRate,
+      exchangeRate: effectiveRubPerCny,
     };
-  }, [input, effectiveExchangeRate]);
+  }, [input, effectiveRubPerCny]);
 
   // 执行完整计算（使用实际汇率）
   const result = useMemo(
@@ -561,7 +561,7 @@ export default function Home() {
         default: return 0;
       }
     })();
-    const cpcCost = effectiveInput.cpcEnabled && effectiveInput.cpcConversionRate > 0 ? (effectiveInput.cpcBid / (effectiveInput.cpcConversionRate / 100)) * effectiveInput.exchangeRate : 0;
+    const cpcCost = effectiveInput.cpcEnabled && effectiveInput.cpcConversionRate > 0 ? rubToCny(effectiveInput.cpcBid / (effectiveInput.cpcConversionRate / 100), effectiveInput.exchangeRate) : 0;
     return {
       totalFixedCost: effectiveInput.purchaseCost + effectiveInput.domesticShipping + effectiveInput.packagingFee + internationalShipping + cpcCost + returnCost,
       cpaRateForM: effectiveInput.cpaEnabled ? effectiveInput.cpaRate : 0,
@@ -782,7 +782,11 @@ export default function Home() {
           await loadCommissionData(pendingMappingFile, "overwrite");
           setUploadToast({ message: `✅ 佣金表导入成功！`, type: 'success' });
         } else {
-          await loadShippingData(pendingMappingFile, "overwrite");
+          const mappingRecord = Object.fromEntries(
+            mappings.map((m) => [m.systemField, m.columnIndex])
+          ) as Record<string, number>;
+          updateColumnMapping("shipping", mappingRecord);
+          await loadShippingData(pendingMappingFile, "overwrite", mappingRecord);
           setUploadToast({ message: `✅ 物流表导入成功！`, type: 'success' });
           
           // 🔹 物流表：提取拦截配置并保存
@@ -801,7 +805,7 @@ export default function Home() {
     
     setPendingMappingFile(null);
     setParsedCsvData(null);
-  }, [pendingMappingFile, mappingDataType, loadCommissionData, loadShippingData, updateInterceptionConfig]);
+  }, [pendingMappingFile, mappingDataType, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig]);
   
   // 🔹 映射取消处理
   const handleMappingCancel = useCallback(() => {
@@ -812,7 +816,7 @@ export default function Home() {
 
   // 计算卢布售价
   // 🔴 修复：exchangeRate = 1 CNY 对应的 RUB 数量，RMB → RUB 应使用乘法
-  const priceRUB = input.exchangeRate > 0 ? input.targetPriceRMB * input.exchangeRate : 0;
+  const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
 
   // 🔹 预计算渠道运费（仅可用渠道，不可用渠道按需计算）
   const channelCosts = useMemo(() => {
@@ -933,7 +937,7 @@ export default function Home() {
               <span className="text-lg font-bold tabular-nums text-[#4F46E5]">
                 ¥{input.targetPriceRMB.toFixed(0)}
               </span>
-              <span className="text-[9px] text-indigo-500 font-semibold uppercase tracking-wide">≈ {Math.round(input.targetPriceRMB * input.exchangeRate).toLocaleString()} ₽</span>
+              <span className="text-[9px] text-indigo-500 font-semibold uppercase tracking-wide">≈ {Math.round(cnyToRub(input.targetPriceRMB, input.exchangeRate)).toLocaleString()} ₽</span>
             </div>
           </div>
           
@@ -1179,7 +1183,7 @@ export default function Home() {
                   {/* 如果填写了尺寸重量��没有售价 - 显示价格建议 */}
                   {/* 🔴 智能售价建议：区分可修复/不可修复渠道 */}
                   {input.length > 0 && input.width > 0 && input.height > 0 && input.weight > 0 && input.targetPriceRMB <= 0 && shippingChannels.unavailable.length > 0 && (() => {
-                    const suggestion = calculateSuggestedPrice(shippingChannels.unavailable, input.exchangeRate);
+                    const suggestion = calculateSuggestedPrice(shippingChannels.unavailable, effectiveRubPerCny, input.valueLimitCurrency);
                     if (suggestion.fixableChannels.length > 0) {
                       return (
                         <div className="bg-amber-50 p-2 rounded mb-2">
@@ -1313,15 +1317,25 @@ export default function Home() {
           
           // 提取价格限制的渠道，获取其数值范围
           const valueBlockedChannel = shippingChannels.unavailable.find(ch => ch.reason?.includes('货值') || ch.reason?.includes('价'));
-          const maxValueRUB = valueBlockedChannel?.maxValueRUB;
-          const minValueRUB = valueBlockedChannel?.minValueRUB;
-          const priceRUB = input.targetPriceRMB * input.exchangeRate;
+          const preferredCurrency = input.valueLimitCurrency;
+          const preferredMin = preferredCurrency === "RMB" ? valueBlockedChannel?.minValue : valueBlockedChannel?.minValueRUB;
+          const preferredMax = preferredCurrency === "RMB" ? valueBlockedChannel?.maxValue : valueBlockedChannel?.maxValueRUB;
+          const fallbackCurrency = preferredCurrency === "RMB" ? "RUB" : "RMB";
+          const fallbackMin = fallbackCurrency === "RMB" ? valueBlockedChannel?.minValue : valueBlockedChannel?.minValueRUB;
+          const fallbackMax = fallbackCurrency === "RMB" ? valueBlockedChannel?.maxValue : valueBlockedChannel?.maxValueRUB;
+          const useRmbLimit = preferredMin !== undefined || preferredMax !== undefined
+            ? preferredCurrency === "RMB"
+            : fallbackCurrency === "RMB";
+          const maxValue = preferredMin !== undefined || preferredMax !== undefined ? preferredMax : fallbackMax;
+          const minValue = preferredMin !== undefined || preferredMax !== undefined ? preferredMin : fallbackMin;
+          const currentValue = useRmbLimit ? input.targetPriceRMB : cnyToRub(input.targetPriceRMB, input.exchangeRate);
+          const unit = useRmbLimit ? "¥" : "₽";
           
           // 判断是价格过高还是过低
-          const isPriceTooHigh = maxValueRUB && priceRUB > maxValueRUB;
-          const isPriceTooLow = minValueRUB && priceRUB < minValueRUB;
+          const isPriceTooHigh = maxValue !== undefined && currentValue > maxValue;
+          const isPriceTooLow = minValue !== undefined && currentValue < minValue;
           
-          return (valueBlockedChannel && (maxValueRUB || minValueRUB)) ? (
+          return (valueBlockedChannel && (maxValue !== undefined || minValue !== undefined)) ? (
             <span className="flex-shrink-0 inline-flex items-center gap-1 px-4 py-2 rounded-full text-base font-bold bg-red-500 text-white border-3 border-red-600 shadow-lg animate-urgent-pulse">
               <span>❌</span>
               <span>{isPriceTooHigh && !isPriceTooLow ? '价格过高' : isPriceTooLow && !isPriceTooHigh ? '价格过低' : '价格不符'}</span>
@@ -1337,14 +1351,16 @@ export default function Home() {
                   <div className="mt-2 bg-red-50 p-2 rounded space-y-1">
                     <div className="flex justify-between text-[11px]">
                       <span className="text-slate-500">您的售价:</span>
-                      <span className="font-semibold text-red-600">≈ {Math.round(priceRUB).toLocaleString()} ₽ (¥{input.targetPriceRMB})</span>
+                      <span className="font-semibold text-red-600">
+                        {unit}{useRmbLimit ? currentValue.toFixed(2) : Math.round(currentValue).toLocaleString()}
+                      </span>
                     </div>
                     <div className="flex justify-between text-[11px]">
                       <span className="text-slate-500">渠道要求:</span>
                       <span className="font-semibold">
-                        {minValueRUB ? `${Math.round(minValueRUB).toLocaleString()}+` : '无下限'}
-                        {minValueRUB && maxValueRUB ? ' ~ ' : ''}
-                        {maxValueRUB ? `${Math.round(maxValueRUB).toLocaleString()}` : '无上限'} ₽
+                        {minValue !== undefined ? `${unit}${useRmbLimit ? minValue.toFixed(2) : Math.round(minValue).toLocaleString()}` : '无下限'}
+                        {minValue !== undefined && maxValue !== undefined ? ' ~ ' : ''}
+                        {maxValue !== undefined ? `${unit}${useRmbLimit ? maxValue.toFixed(2) : Math.round(maxValue).toLocaleString()}` : '无上限'}
                       </span>
                     </div>
                   </div>
@@ -1547,6 +1563,25 @@ export default function Home() {
                     }`}
                   >
                     {icon} {label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1 mt-2">
+                <span className="text-[10px] text-slate-400 mr-1">货值:</span>
+                {[
+                  { key: "RMB" as const, label: "人民币货值" },
+                  { key: "RUB" as const, label: "卢布货值" },
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => handleInputChange({ ...input, valueLimitCurrency: key })}
+                    className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                      input.valueLimitCurrency === key
+                        ? "bg-emerald-500 text-white shadow-sm"
+                        : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                    }`}
+                  >
+                    {label}
                   </button>
                 ))}
               </div>

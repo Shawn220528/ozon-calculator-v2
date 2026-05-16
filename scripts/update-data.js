@@ -106,19 +106,45 @@ function parseDeliveryTime(timeStr) {
     return { min: 20, max: 40 };
   }
 
-  // 处理 "5月14日" 这样的格式
-  if (timeStr.includes('月') && timeStr.includes('日')) {
-    return { min: 5, max: 14 };
+  const normalizeRange = (a, b) => {
+    const min = Math.min(a, b);
+    const max = Math.max(a, b);
+    return min > 0 && max <= 120 ? { min, max } : { min: 20, max: 40 };
+  };
+
+  const value = String(timeStr).trim();
+
+  const dateTokens = value.match(/\d+/g)?.map((token) => parseInt(token, 10)) || [];
+  if (dateTokens.length >= 3) {
+    const [first, second, third] = dateTokens;
+    if (first >= 1900 && second >= 1 && second <= 120 && third >= 1 && third <= 120) {
+      return normalizeRange(second, third);
+    }
+    if ((third >= 1900 || third <= 99) && first >= 1 && first <= 120 && second >= 1 && second <= 120) {
+      return normalizeRange(first, second);
+    }
   }
 
-  const match = timeStr.match(/(\d+)\s*[-–—]\s*(\d+)/);
+  const match = value.match(/(\d{1,3})\s*(?:[-–—~至到]|\.{2})\s*(\d{1,3})/);
   if (match) {
-    return { min: parseInt(match[1]), max: parseInt(match[2]) };
+    return normalizeRange(parseInt(match[1], 10), parseInt(match[2], 10));
   }
 
-  const singleNum = timeStr.match(/(\d+)/);
+  const chineseDateLike = value.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|号)?/);
+  if (chineseDateLike) {
+    return normalizeRange(parseInt(chineseDateLike[1], 10), parseInt(chineseDateLike[2], 10));
+  }
+
+  if (dateTokens.length === 2 && /[/.]/.test(value)) {
+    return normalizeRange(dateTokens[0], dateTokens[1]);
+  }
+
+  const singleNum = value.match(/(\d{1,3})/);
   if (singleNum) {
-    return { min: parseInt(singleNum[1]), max: parseInt(singleNum[1]) };
+    const days = parseInt(singleNum[1], 10);
+    if (days > 0 && days <= 120) {
+      return { min: days, max: days };
+    }
   }
 
   return { min: 20, max: 40 };

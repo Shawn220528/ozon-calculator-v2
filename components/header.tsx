@@ -88,7 +88,7 @@ export function Header({
     setRateFetchError(null);
     
     try {
-      // 使用免费汇率 API (RUB to CNY)
+      // 使用免费汇率 API: 返回 1 RUB = X CNY，需要转为 1 CNY = X RUB
       const response = await fetch('https://open.er-api.com/v6/latest/RUB');
       
       if (!response.ok) {
@@ -98,7 +98,7 @@ export function Header({
       const data = await response.json();
       
       if (data.rates && data.rates.CNY) {
-        const rate = data.rates.CNY; // RUB to CNY
+        const rate = 1 / parseFloat(data.rates.CNY.toFixed(6));
         onExchangeRateChange(parseFloat(rate.toFixed(4)));
         setLastFetchTime(new Date());
       } else {
@@ -490,11 +490,11 @@ export function Header({
               step="0.001"
               min="0.001"
               value={exchangeRate}
-              onChange={(e) => onExchangeRateChange(parseFloat(e.target.value) || 0.082)}
+              onChange={(e) => onExchangeRateChange(parseFloat(e.target.value) || 12)}
               className="w-20 h-7 text-xs"
             />
             <span className="text-xs text-muted-foreground">
-              1₽={exchangeRate.toFixed(3)}¥
+              1¥={exchangeRate.toFixed(3)}₽
             </span>
             <Button
               variant="ghost"
