@@ -779,7 +779,11 @@ export default function Home() {
     if (pendingMappingFile) {
       try {
         if (mappingDataType === "commission") {
-          const summary = await loadCommissionData(pendingMappingFile, "overwrite");
+          const mappingRecord = Object.fromEntries(
+            mappings.map((m) => [m.systemField, m.columnIndex])
+          ) as Record<string, number>;
+          updateColumnMapping("commission", mappingRecord);
+          const summary = await loadCommissionData(pendingMappingFile, "overwrite", mappingRecord);
           setUploadToast({ message: `✅ 佣金表导入成功：${summary.categories || 0} 个类目`, type: 'success' });
         } else {
           const mappingRecord = Object.fromEntries(

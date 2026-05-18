@@ -20,6 +20,10 @@ import {
   parseShippingRateString as parseShippingRateStringShared,
   parseValueRange as parseValueRangeShared,
 } from "./logistics-parsing";
+import {
+  normalizeCommissionCategory,
+  parseCommissionRows,
+} from "./commission-parsing";
 
 // 佣金阶梯金额边界
 const TIER_BOUNDARIES = [
@@ -42,7 +46,7 @@ interface DataHubContextType {
   columnMapping: ColumnMapping;
   interceptionConfig: Record<string, boolean>; // 🔹 拦截配置
   lastImportSummary: ImportSummary | null;
-  loadCommissionData: (file: File, mode?: "overwrite" | "merge") => Promise<ImportSummary>;
+  loadCommissionData: (file: File, mode?: "overwrite" | "merge", mappingOverride?: Record<string, number>) => Promise<ImportSummary>;
   loadShippingData: (file: File, mode?: "overwrite" | "merge", mappingOverride?: Record<string, number>) => Promise<ImportSummary>;
   clearCommissionData: () => void;
   clearShippingData: () => void;
@@ -97,10 +101,6 @@ function safeLocalStorageSet(key: string, value: string): { success: boolean; er
   }
 }
 
-function parsePercentString(val: string): number {
-  return parseFloat(val.replace("%", "").replace(",", ".").trim());
-}
-
 /**
  * 欧式数字清洗器
  * 处理俄罗斯/欧洲导出表格中的千分位空格和逗号小数点
@@ -111,111 +111,6 @@ function parseEuropeanNumber(val: string | number | null | undefined): number {
   const cleanVal = String(val).replace(/\s/g, '').replace(',', '.');
   const num = parseFloat(cleanVal.replace(/[^\d.-]/g, ''));
   return isNaN(num) ? 0 : num;
-}
-
-/**
- * 智能寻找真实表头行（佣金表）
- * 查找包含 "一级类目" 和 "二级类目" 的行
- */
-function findCommissionHeaderRow(rows: string[][]): number {
-  for (let i = 0; i < Math.min(rows.length, 20); i++) {
-    const row = rows[i];
-    const joined = row.join(" ").toLowerCase();
-    if (joined.includes("一级类目") && joined.includes("二级类目")) {
-      return i;
-    }
-    // 英文备选
-    if (joined.includes("primary") && joined.includes("category")) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-/**
- * 智能寻找佣金费率列
- * 查找包含 "Тариф" 或 "tariff" 或 "rate" 或 "%" 和阶梯区间关键字的列
- */
-function findCommissionTierColumns(headers: string[]): { tier1: number; tier2: number; tier3: number } {
-  let tier1 = -1, tier2 = -1, tier3 = -1;
-  
-  // 🔹 策略1：精确匹配阶梯关键词
-  for (let i = 0; i < headers.length; i++) {
-    const h = headers[i].toLowerCase();
-    const originalH = headers[i]; // 保留原始大小写
-    
-    // 第一阶梯：0-1500 RUB
-    if (tier1 === -1) {
-      // 🔹 优化匹配：支持 "0 - 1500", "0-1500", "<1500" 等格式
-if ((h.includes("0") && h.includes("1500") && h.includes("rfbs")) || 
-           h.includes("tier1") || 
-           h.includes("c1") ||
-           h.includes("<1500") ||
-           h.includes("до 1500") ||
-           h.includes("до 1500 руб") ||
-           (h.includes("rfbs") && h.includes("0") && h.includes("1500") && !h.includes("1500.01") && !h.includes("5000"))) {
-        tier1 = i;
-      }
-    }
-    
-    // 第二阶梯：1500-5000 RUB
-    if (tier2 === -1) {
-      // 🔹 优化匹配：支持 "1500.01 - 5000", "1500-5000" 等格式
-if ((h.includes("1500") && h.includes("5000") && h.includes("rfbs") && !h.includes("5000.01")) || 
-           h.includes("tier2") || 
-           h.includes("c2") ||
-           (h.includes("1500") && h.includes("5000") && !h.includes("5000.01") && !h.includes("0 - 1500")) ||
-           h.includes("от 1500") ||
-           h.includes("1500-5000 руб") ||
-           h.includes("1500.01")) {
-        tier2 = i;
-      }
-    }
-    
-    // 第三阶梯：>5000 RUB
-    if (tier3 === -1) {
-      // 🔹 优化匹配：支持 "5000.01+", ">5000", "5000+" 等格式
-if ((h.includes("5000") && (h.includes("+") || h.includes("plus") || h.includes(">") || h.includes(".01+"))) || 
-           h.includes("tier3") || 
-           h.includes("c3") ||
-           h.includes(">5000") ||
-           h.includes("от 5000") ||
-           h.includes("> 5000 руб") ||
-           h.includes("5000+") ||
-           h.includes("5000.01+") ||
-           (h.includes("rfbs") && h.includes("5000") && (h.includes("+") || h.includes(">") || h.includes(".01")))) {
-        tier3 = i;
-      }
-    }
-  }
-  
-  // 🔹 策略2：兜底 - 按顺序识别费率列
-  if (tier1 === -1 || tier2 === -1 || tier3 === -1) {
-    const rateColumns: number[] = [];
-    for (let i = 0; i < headers.length; i++) {
-      const h = headers[i].toLowerCase();
-      // 🔹 增强识别：包含 "тариф" 或 "%" 且在 RFBS 列之后
-      if (h.includes("тариф") || 
-          h.includes("rate") || 
-          h.includes("%") || 
-          (h.includes("rfbs") && h.includes("тариф"))) {
-        rateColumns.push(i);
-      }
-    }
-    
-    if (rateColumns.length >= 3) {
-      if (tier1 === -1) tier1 = rateColumns[0];
-      if (tier2 === -1) tier2 = rateColumns[1];
-      if (tier3 === -1) tier3 = rateColumns[2];
-    } else if (rateColumns.length === 1) {
-      // 🔹 极端情况：只有一列费率，可能是通用费率
-      tier1 = rateColumns[0];
-      tier2 = rateColumns[0];
-      tier3 = rateColumns[0];
-    }
-  }
-  
-  return { tier1, tier2, tier3 };
 }
 
 /**
@@ -524,56 +419,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
    * 加载佣金数据（CSV 或 XLSX）
    * 核心改进：智能寻找真实表头行
    */
-  const loadCommissionData = useCallback(async (file: File) => {
+  const loadCommissionData = useCallback(async (file: File, _mode: "overwrite" | "merge" = "overwrite", mappingOverride?: Record<string, number>) => {
     return new Promise<ImportSummary>((resolve, reject) => {
       const ext = file.name.split(".").pop()?.toLowerCase();
 
       const parseRows = (rawRows: string[][]) => {
-        // 智能寻找真实表头行
-        const headerIdx = findCommissionHeaderRow(rawRows);
-        if (headerIdx === -1) {
-          throw new Error("无法找到佣金表的真实表头行（需要包含「一级类目」和「二级类目」）");
-        }
-
-        const headers = rawRows[headerIdx];
-        const dataRows = rawRows.slice(headerIdx + 1);
-
-        // 寻找类目列
-        const primaryIdx = headers.findIndex(h => h.includes("一级类目"));
-        const secondaryIdx = headers.findIndex(h => h.includes("二级类目"));
-
-        if (primaryIdx === -1 || secondaryIdx === -1) {
-          throw new Error("佣金表缺少必要的类目列");
-        }
-
-        // 寻找费率列
-        const { tier1, tier2, tier3 } = findCommissionTierColumns(headers);
-
-        const parsed: CategoryCommission[] = [];
-        for (const row of dataRows) {
-          const primary = row[primaryIdx]?.trim();
-          const secondary = row[secondaryIdx]?.trim();
-          if (!primary || !secondary) continue;
-
-          // 🔹 解析三个阶梯的费率
-          const rate1 = tier1 >= 0 ? parsePercentString(row[tier1] || "0") : 12;
-          const rate2 = tier2 >= 0 ? parsePercentString(row[tier2] || "0") : 15;
-          const rate3 = tier3 >= 0 ? parsePercentString(row[tier3] || "0") : 18;
-          
-          const commissionItem: CategoryCommission = {
-            primaryCategory: primary,
-            secondaryCategory: secondary,
-            tiers: [
-              { min: 0, max: 1500, rate: rate1 },
-              { min: 1500.01, max: 5000, rate: rate2 },
-              { min: 5000.01, max: Infinity, rate: rate3 },
-            ],
-          };
-          
-          parsed.push(commissionItem);
-        }
-
-        return parsed;
+        return parseCommissionRows(rawRows, mappingOverride);
       };
 
       if (ext === "csv") {
@@ -978,8 +829,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
 
   const getCommissionByCategory = useCallback(
     (primary: string, secondary: string) => {
+      const normalizedPrimary = normalizeCommissionCategory(primary);
+      const normalizedSecondary = normalizeCommissionCategory(secondary);
       return commissionData.find(
-        (item) => item.primaryCategory === primary && item.secondaryCategory === secondary
+        (item) =>
+          normalizeCommissionCategory(item.primaryCategory) === normalizedPrimary &&
+          normalizeCommissionCategory(item.secondaryCategory) === normalizedSecondary
       );
     },
     [commissionData]
