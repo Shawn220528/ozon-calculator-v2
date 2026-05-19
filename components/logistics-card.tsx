@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Star } from "lucide-react";
+import { useCallback } from "react";
+import { Battery, Droplets, Ruler, Scale, Star, Timer } from "lucide-react";
 import { ShippingChannel, CalculationInput } from "@/lib/types";
 import { CalculationTrace } from "./mapping-debug-panel";
 
@@ -40,8 +40,6 @@ const fPrice = (v: number | undefined | null, currency: "RMB" | "RUB"): string =
 };
 
 export function LogisticsCard({ channel, cost, billing, isSelected, onClick, input, isFavorite = false, onToggleFavorite }: LogisticsCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  
   // 🔹 收藏切换回调
   const handleToggleFavorite = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -98,7 +96,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
   return (
     <div 
       onClick={onClick}
-      className={`relative border rounded-lg p-4 mb-2 transition-all cursor-pointer ${
+      className={`relative mb-1.5 cursor-pointer rounded-lg border p-2.5 transition-all ${
         !isAvailable 
           ? 'bg-secondary opacity-60 border-border' 
           : isSelected 
@@ -107,21 +105,22 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
       }`}
     >
       {/* 1. 顶部状态栏：时效 + 计抛强提醒 + Ozon 评级 */}
-      <div className="flex justify-between items-center mb-3">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground bg-secondary px-2 py-0.5 rounded">
-            ⏱ {channel.deliveryTimeMin || 15}-{channel.deliveryTimeMax || 30} 天
+          <span className="inline-flex items-center gap-1 rounded bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <Timer className="h-3 w-3" />
+            {channel.deliveryTimeMin || 15}-{channel.deliveryTimeMax || 30} 天
           </span>
           {showVolumetricLabel && isAvailable && (
-            <span className="animate-warning-pulse bg-amber-500 text-white text-[11px] px-2.5 py-1 rounded-full font-bold shadow-lg ring-2 ring-amber-400">
-              ⚠️ 触发计抛
+            <span className="rounded bg-amber-500 px-2 py-0.5 text-[11px] font-bold text-white shadow-sm">
+              计抛
             </span>
           )}
           {/* Ozon 评级标签 */}
           {channel.ozonRating > 0 && (
-            <div className="flex items-center gap-1 bg-yellow-50 text-yellow-700 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-yellow-200">
-              <span className="text-yellow-500">★</span>
-              <span>{channel.ozonRating.toFixed(1)}</span>
+            <div className="flex items-center gap-1 rounded border border-yellow-200 bg-yellow-50 px-2 py-0.5 text-[10px] font-semibold text-yellow-700">
+              <Star className="h-3 w-3 fill-yellow-400 text-yellow-500" />
+              {channel.ozonRating.toFixed(1)}
             </div>
           )}
         </div>
@@ -129,10 +128,10 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
         {onToggleFavorite && (
           <button
             onClick={handleToggleFavorite}
-            className="absolute top-2 right-2 p-1.5 rounded-full hover:bg-secondary transition-colors"
+            className="absolute right-2 top-2 rounded-md p-1 hover:bg-secondary transition-colors"
             title={isFavorite ? "取消收藏" : "添加到收藏夹"}
           >
-            <Star className={`h-4 w-4 ${isFavorite ? "fill-yellow-400 text-yellow-500" : "text-muted-foreground"}`} />
+          <Star className={`h-3.5 w-3.5 ${isFavorite ? "fill-yellow-400 text-yellow-500" : "text-muted-foreground"}`} />
           </button>
         )}
         <div className="text-xs text-muted-foreground font-medium">
@@ -141,9 +140,9 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
       </div>
 
       {/* 2. 标题与价格区 */}
-      <div className="flex justify-between items-start mb-3">
-        <div className="flex-1">
-          <h3 className="text-base font-bold text-foreground leading-tight">
+      <div className="mb-1.5 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-sm font-bold leading-tight text-foreground">
             {channel.name}
           </h3>
           <div className="flex items-center gap-1.5 mt-1">
@@ -154,7 +153,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
           </div>
         </div>
         <div className="text-right">
-          <div className="text-xl font-bold text-[#6366F1]">
+          <div className="text-lg font-bold leading-5 text-[#6366F1]">
             ¥ {freightData.total.toFixed(2)}
           </div>
           {/* 原价仅在计抛时显示 */}
@@ -167,36 +166,38 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
       </div>
 
       {/* 3. 特货属性横条 - 醒目对比 */}
-      <div className="flex gap-2 mb-3">
-        <div className={`flex-1 text-center py-1 rounded text-[11px] font-bold border-2 ${
+      <div className="mb-1.5 grid grid-cols-2 gap-1">
+        <div className={`flex items-center justify-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold ${
           limits.allowBattery 
-            ? 'bg-emerald-100 text-emerald-700 border-emerald-300' 
-            : 'bg-red-100 text-red-700 border-red-300'
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+            : 'bg-red-50 text-red-700 border-red-200'
         }`}>
-          {limits.allowBattery ? '⚡ 支持带电' : '🚫 禁发带电'}
+          <Battery className="h-3 w-3" />
+          {limits.allowBattery ? '可带电' : '禁带电'}
         </div>
-        <div className={`flex-1 text-center py-1 rounded text-[11px] font-bold border-2 ${
+        <div className={`flex items-center justify-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold ${
           limits.allowLiquid 
-            ? 'bg-emerald-100 text-emerald-700 border-emerald-300' 
-            : 'bg-red-100 text-red-700 border-red-300'
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+            : 'bg-red-50 text-red-700 border-red-200'
         }`}>
-          {limits.allowLiquid ? '💧 支持液体' : '🚫 禁发液体'}
+          <Droplets className="h-3 w-3" />
+          {limits.allowLiquid ? '可带液' : '禁带液'}
         </div>
       </div>
 
       {/* 4. 限制矩阵 */}
-      <div className="grid grid-cols-2 gap-2 bg-secondary p-2.5 rounded border border-border">
-        <div className="text-[11px] text-muted-foreground">
-          <span className="opacity-70">⚖️ 限重:</span> <b className="text-foreground">{limits.minWt}-{fDim(limits.maxWt)}g</b>
+      <div className="grid grid-cols-2 gap-1 rounded border border-border bg-secondary p-1.5">
+        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <Scale className="h-3 w-3 opacity-70" /> <b className="text-foreground">{limits.minWt}-{fDim(limits.maxWt)}g</b>
+        </div>
+        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <Ruler className="h-3 w-3 opacity-70" /> <b className="text-foreground">边{fDim(limits.maxSide)}cm</b>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          <span className="opacity-70">📏 边长:</span> <b className="text-foreground">最长边{fDim(limits.maxSide)}cm</b>
+          <span className="opacity-70">三边和:</span> <b className="text-foreground">{fDim(limits.maxSum)}cm</b>
         </div>
         <div className="text-[11px] text-muted-foreground">
-          <span className="opacity-70">📐 三边和:</span> <b className="text-foreground">{fDim(limits.maxSum)}cm</b>
-        </div>
-        <div className="text-[11px] text-muted-foreground">
-          <span className="opacity-70">💰 货值:</span>{" "}
+          <span className="opacity-70">货值:</span>{" "}
           <b className="text-foreground">
             {minValueLabel}-{maxValueLabel}
           </b>
@@ -204,7 +205,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
       </div>
 
       {/* 5. 计费详情 (默认折叠) - 计费重醒目 - 带动画 */}
-      <details className="mt-3 group">
+      <details className="group mt-2">
         <summary className="text-[10px] cursor-pointer hover:text-[#6366F1] list-none flex items-center gap-1 select-none font-medium">
           <span className="transition-transform duration-200 group-open:rotate-180">▼</span> 
           <span>查看计费详情 </span>

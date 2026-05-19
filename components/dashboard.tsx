@@ -101,6 +101,20 @@ interface DashboardProps {
 
 const COST_COLORS = ["#6366F1", "#F59E0B", "#8B5CF6", "#EF4444", "#10B981", "#EC4899"];
 
+function getFinanceTextClass(value: number | undefined | null): string {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "text-slate-700";
+  }
+  return value >= 0 ? "text-red-700" : "text-emerald-700";
+}
+
+function getFinancePanelClass(value: number | undefined | null): string {
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return "bg-slate-50 border border-slate-200";
+  }
+  return value >= 0 ? "bg-red-50/80 border border-red-200" : "bg-emerald-50/80 border border-emerald-200";
+}
+
 export function Dashboard({
   result,
   input,
@@ -120,6 +134,8 @@ export function Dashboard({
   commission,
 }: DashboardProps) {
   const E = input.exchangeRate; // CNY/RUB (1 CNY = X RUB)
+  const [advisorExpanded, setAdvisorExpanded] = useState(false);
+  const [chartsExpanded, setChartsExpanded] = useState(false);
 
   // ====== 客户端渲染标记 ======
   const [isClient, setIsClient] = useState(false);
@@ -196,6 +212,12 @@ export function Dashboard({
       { name: "提现手续费", value: result.costs.withdrawalFee },
       { name: "广告支出", value: result.costs.cpaCost + result.costs.cpcCost },
       { name: "退货损耗", value: result.costs.returnCost },
+      ...(result.taxes?.enabled
+        ? [
+            { name: "增值税估算", value: result.taxes.vatPayable },
+            { name: "企业所得税", value: result.taxes.corporateTax },
+          ]
+        : []),
     ].filter((d) => d.value > 0);
     
     // 🔹 计算总成本验证
@@ -203,7 +225,7 @@ export function Dashboard({
     const costTotal = result.costs.total;
     
     return data;
-  }, [result.costs]);
+  }, [result.costs, result.taxes]);
 
   // 运费对比柱状图数据（前5名最便宜渠道）
   const shippingChartData = useMemo(() => {
@@ -312,111 +334,165 @@ export function Dashboard({
     return margin;
   };
 
+  const advisorActions = useMemo(() => {
+    const actions: Array<{
+      title: string;
+      reason: string;
+      impact: string;
+      tone: "red" | "amber" | "green" | "blue";
+    }> = [];
+
+    const targetMargin = profitWarningThreshold ?? 15;
+    if (result.netProfit < 0 || result.profitMargin < targetMargin) {
+      const gap = Math.max(0, targetMargin - result.profitMargin);
+      const suggestedTier = sixTierPricing.find((tier) => !tier.disabled && tier.profitMargin >= targetMargin);
+      actions.push({
+        title: suggestedTier ? `售价调至 ¥${suggestedTier.priceRMB.toFixed(2)}` : "提高售价或降低固定成本",
+        reason: result.netProfit < 0 ? "当前单件为亏损状态" : `当前利润率低于 ${targetMargin}% 经营阈值`,
+        impact: suggestedTier ? `目标 ${suggestedTier.label}，预计利润率 ${suggestedTier.profitMargin}%` : `利润率缺口约 ${gap.toFixed(1)} 个点`,
+        tone: result.netProfit < 0 ? "red" : "amber",
+      });
+    }
+
+    if (shippingChannels.available.length === 0) {
+      actions.push({
+        title: "先修复物流可发性",
+        reason: `当前 ${shippingChannels.unavailable.length} 条渠道均被拦截`,
+        impact: "查看顶部诊断，按货值/重量/尺寸/属性逐项排查",
+        tone: "red",
+      });
+    } else if (result.isVolumetric) {
+      actions.push({
+        title: "优化包装尺寸",
+        reason: `计费重 ${result.chargeableWeight.toFixed(0)}g 高于实重 ${input.weight.toFixed(0)}g`,
+        impact: `抛重约 ${result.volumetricWeight.toFixed(0)}g，优先压缩长宽高`,
+        tone: "amber",
+      });
+    }
+
+    if (result.adRiskControl?.isOverBudget) {
+      actions.push({
+        title: "降低广告出价或关闭广告",
+        reason: `当前 ACOS ${result.adRiskControl.currentACOS.toFixed(1)}% 超过保本 ${result.adRiskControl.breakEvenACOS.toFixed(1)}%`,
+        impact: "先恢复单件毛利，再重新测试 CPA/CPC",
+        tone: "red",
+      });
+    }
+
+    if (stressTest.at10PercentDrop < 0) {
+      actions.push({
+        title: "增加汇率安全缓冲",
+        reason: "汇率下跌 10% 后利润转负",
+        impact: `10% 压力利润 ¥${stressTest.at10PercentDrop.toFixed(2)}`,
+        tone: "amber",
+      });
+    }
+
+    if (selectedChannel && shippingChannels.available.length > 1) {
+      const cheaper = shippingChannels.available
+        .map((channel) => ({ channel, cost: calculateShippingCost(channel, result.chargeableWeight) }))
+        .filter((item) => item.channel.id !== selectedChannel.id)
+        .sort((a, b) => a.cost - b.cost)[0];
+      const currentCost = calculateShippingCost(selectedChannel, result.chargeableWeight);
+      if (cheaper && cheaper.cost + 0.5 < currentCost) {
+        actions.push({
+          title: `换到 ${cheaper.channel.thirdParty || cheaper.channel.name}`,
+          reason: "存在更低运费的可用渠道",
+          impact: `预计每单节省 ¥${(currentCost - cheaper.cost).toFixed(2)}`,
+          tone: "blue",
+        });
+      }
+    }
+
+    if (result.taxes?.enabled && result.taxes.afterTaxNetProfit < result.netProfit) {
+      actions.push({
+        title: "按税后利润复核售价",
+        reason: "已开启税务模拟，默认净利不再代表最终留存",
+        impact: `税后净利 ¥${result.taxes.afterTaxNetProfit.toFixed(2)}`,
+        tone: result.taxes.afterTaxNetProfit >= 0 ? "blue" : "red",
+      });
+    }
+
+    if (actions.length === 0) {
+      actions.push({
+        title: "当前参数可进入下一步",
+        reason: "利润、物流和广告风险未触发严重预警",
+        impact: "可继续做竞品价格或批量 SKU 对比",
+        tone: "green",
+      });
+    }
+
+    return actions.slice(0, 4);
+  }, [input.weight, profitWarningThreshold, result, selectedChannel, shippingChannels, sixTierPricing, stressTest]);
+
+  const verdict = result.netProfit < 0
+    ? { label: "不建议上架", className: "bg-red-50 text-red-700 border-red-200" }
+    : shippingChannels.available.length === 0
+      ? { label: "物流不可发", className: "bg-red-50 text-red-700 border-red-200" }
+      : result.profitMargin < (profitWarningThreshold ?? 10)
+        ? { label: "谨慎测试", className: "bg-amber-50 text-amber-700 border-amber-200" }
+        : { label: "可进入测试", className: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+
   return (
-    <div className="space-y-5 overflow-y-auto max-h-[calc(100vh-6rem)] pr-1 scrollbar-thin">
+    <div className="space-y-2 pr-1">
       {/* 警告信息已移至左侧 Live Monitor Console */}
 
-
-
-      {/* 🔹 实时调试卡片：佣金阶梯匹配（已隐藏） */}
-      {/* 
-      <Card className="bg-blue-50 border-2 border-blue-300">
-        <CardContent className="p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="h-4 w-4 text-blue-700" />
-            <span className="font-bold text-blue-900">🔍 佣金阶梯匹配调试</span>
-          </div>
-          
-          
-          {commission && commission.tiers.length >= 2 && (
-            (() => {
-              const rates = commission.tiers.map(t => t.rate);
-              const allSame = rates.every(r => r === rates[0]);
-              if (allSame) {
-                return (
-                  <div className="mb-3 p-3 bg-red-100 border-2 border-red-400 rounded-md">
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 text-red-700 mt-0.5" />
-                      <div className="text-sm text-red-800 font-medium">
-                        <div className="font-bold mb-1">⚠️ 佣金数据异常！</div>
-                        <div>所有阶梯费率相同 ({rates[0]}%)，可能是数据解析错误。</div>
-                        <div className="mt-2 text-xs">请按以下步骤修复：</div>
-                        <ol className="list-decimal ml-4 mt-1 text-xs space-y-1">
-                          <li>刷新页面（F5）清除缓存</li>
-                          <li>重新上传佣金表 CSV 文件</li>
-                          <li>检查控制台日志确认阶梯费率</li>
-                        </ol>
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
-              return null;
-            })()
-          )}
-          
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-blue-700">前台售价 (RMB):</span>
-              <span className="font-bold text-blue-900">{input.targetPriceRMB.toFixed(2)} ¥</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-blue-700">使用汇率:</span>
-              <span className="font-medium text-blue-800">{input.exchangeRate.toFixed(4)} {input.exchangeRateBuffer > 0 && <span className="text-orange-600">(缓冲后)</span>}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-blue-700">前台售价 (RUB):</span>
-              <span className="font-bold text-blue-900">{cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(2)} ₽</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-blue-700">当前佣金率:</span>
-              <span className="font-bold text-blue-900 text-lg">{result.commissionRate}%</span>
-            </div>
-            {commission && (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-blue-700">所属阶梯:</span>
-                  <span className="font-medium text-blue-800">
-                    {(() => {
-                      const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
-                      const matchedTier = commission.tiers.find(tier => priceRUB >= tier.min && priceRUB <= tier.max);
-                      if (matchedTier) {
-                        return `${matchedTier.min}-${matchedTier.max === Infinity ? '∞' : matchedTier.max} RUB`;
-                      }
-                      return '未知';
-                    })()}
+      {/* 卡片 0：经营结论与推荐动作 */}
+      <Card className="border-slate-200 shadow-none">
+        <CardContent className="p-2.5">
+          <button
+            type="button"
+            onClick={() => setAdvisorExpanded((expanded) => !expanded)}
+            className="flex w-full items-center justify-between gap-2 text-left"
+            aria-expanded={advisorExpanded}
+            data-testid="advisor-toggle"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-50 text-[#6366F1]">
+                <Lightbulb className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-slate-800">经营结论</span>
+                  <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-bold ${verdict.className}`}>
+                    {verdict.label}
                   </span>
                 </div>
-                <div className="mt-3 pt-2 border-t border-blue-300">
-                  <div className="text-xs text-blue-700 mb-1">所有阶梯费率：</div>
-                  {commission.tiers.map((tier, i) => {
-                    const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
-                    const isMatched = priceRUB >= tier.min && priceRUB <= tier.max;
-                    return (
-                      <div key={i} className={`flex justify-between text-xs ${isMatched ? 'font-bold text-blue-900' : 'text-blue-600'}`}>
-                        <span>{tier.min}-{tier.max === Infinity ? '∞' : tier.max} RUB</span>
-                        <span>{tier.rate}% {isMatched && '✓'}</span>
-                      </div>
-                    );
-                  })}
+                <div className="mt-0.5 truncate text-xs text-slate-500">
+                  {advisorActions[0]?.title} · {advisorActions[0]?.impact}
                 </div>
-                {input.exchangeRateBuffer > 0 && (
-                  <div className="mt-2 pt-2 border-t border-blue-300">
-                    <div className="text-xs text-orange-700">
-                      ⚠️ 已启用汇率安全缓冲 {input.exchangeRateBuffer}%，实际汇率: {(input.exchangeRate / (1 - input.exchangeRateBuffer / 100)).toFixed(4)}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+              </div>
+            </div>
+            <span className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+              {advisorExpanded ? "收起" : `展开 ${advisorActions.length} 条`}
+            </span>
+          </button>
+
+          {advisorExpanded && (
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 border-t border-slate-100 pt-3">
+            {advisorActions.map((action, index) => {
+              const toneClass = {
+                red: "border-red-200 bg-red-50 text-red-800",
+                amber: "border-amber-200 bg-amber-50 text-amber-800",
+                green: "border-emerald-200 bg-emerald-50 text-emerald-800",
+                blue: "border-blue-200 bg-blue-50 text-blue-800",
+              }[action.tone];
+              return (
+                <div key={`${action.title}-${index}`} className={`rounded-lg border p-3 ${toneClass}`}>
+                  <div className="text-sm font-bold">{action.title}</div>
+                  <div className="mt-1 text-[11px] leading-relaxed opacity-85">{action.reason}</div>
+                  <div className="mt-2 rounded bg-white/60 px-2 py-1 text-[11px] font-medium">{action.impact}</div>
+                </div>
+              );
+            })}
+            </div>
+          )}
         </CardContent>
       </Card>
-      */}
 
       {/* 卡片 1：财务精算与成本结构图 */}
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="shadow-none">
+        <CardHeader className="px-3 py-2">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">财务精算与成本结构</CardTitle>
             <div className="flex items-center gap-2">
@@ -455,86 +531,51 @@ export function Dashboard({
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-3 pb-3">
           {/* 🔹 利润预警提示 */}
           {profitWarningThreshold !== undefined && profitWarningThreshold !== null && result.profitMargin < profitWarningThreshold && (
-            <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-300 flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
+            <div className="mb-3 flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-center">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
               <div className="text-sm text-amber-800">
                 利润率 <span className="font-bold">{result.profitMargin.toFixed(1)}%</span> 低于预警阈值 <span className="font-bold">{profitWarningThreshold}%</span>
               </div>
             </div>
           )}
 
-          {/* 核心 KPI */}
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="text-center p-4 rounded-xl bg-gradient-to-br from-muted/40 to-muted/10 border">
-              <div className="text-xs text-muted-foreground mb-1">单件净利润</div>
-              <div className={`text-2xl font-bold ${isProfit ? "text-green-600" : "text-red-600"}`}>
-                ¥{result.netProfit.toFixed(2)}
+          {result.taxes?.enabled && (
+            <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-slate-700">含税口径</span>
+                <span className="text-[11px] text-slate-500">
+                  VAT {result.taxes.vatRate}% / 所得税 {result.taxes.corporateTaxRate}%
+                </span>
               </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {E > 0 ? `≈${(result.netProfit * E).toFixed(0)} ₽` : ""}
-              </div>
-            </div>
-            <div className="text-center p-4 rounded-xl bg-gradient-to-br from-muted/40 to-muted/10 border">
-              <div className="text-xs text-muted-foreground mb-1">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="cursor-help">投资回报率 ROI</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" sideOffset={8} className="max-w-xs z-[9999] bg-white border border-slate-200 shadow-lg p-3">
-                      <div className="space-y-1">
-                        <p className="font-medium text-sm">投资回报率 / Return on Investment</p>
-                        <p className="text-xs text-slate-600">
-                          每投入1元总成本能赚取多少净利润。ROI 越高，盈利能力越强。
-                        </p>
-                        <p className="text-xs text-slate-600">
-                          计算公式：净利润 ÷ 总成本 × 100%
-                        </p>
-                        <p className="text-[10px] text-slate-400 mt-1">
-                          总成本 = 采购 + 头程 + 包装 + 跨境运费 + 佣金 + 提现手续费 + 广告 + 退货损耗
-                        </p>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-              <div className={`text-2xl font-bold ${result.roi >= 0 ? "text-green-600" : "text-red-600"}`}>
-                {result.roi.toFixed(1)}%
+              <div className="grid grid-cols-2 gap-1.5 text-xs">
+                <div className="rounded border bg-white px-2 py-1.5">
+                  <div className="text-slate-500">税前净利</div>
+                  <div className={`mt-1 font-bold ${getFinanceTextClass(result.taxes.preTaxNetProfit)}`}>¥{result.taxes.preTaxNetProfit.toFixed(2)}</div>
+                </div>
+                <div className="rounded border bg-white px-2 py-1.5">
+                  <div className="text-slate-500">增值税估算</div>
+                  <div className="mt-1 font-bold text-amber-700">¥{result.taxes.vatPayable.toFixed(2)}</div>
+                </div>
+                <div className="rounded border bg-white px-2 py-1.5">
+                  <div className="text-slate-500">企业所得税</div>
+                  <div className="mt-1 font-bold text-amber-700">¥{result.taxes.corporateTax.toFixed(2)}</div>
+                </div>
+                <div className="rounded border bg-white px-2 py-1.5">
+                  <div className="text-slate-500">税后净利</div>
+                  <div className={`mt-1 font-bold ${getFinanceTextClass(result.taxes.afterTaxNetProfit)}`}>
+                    ¥{result.taxes.afterTaxNetProfit.toFixed(2)}
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="text-center p-4 rounded-xl bg-gradient-to-br from-muted/40 to-muted/10 border">
-              <div className="text-xs text-muted-foreground mb-1">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="cursor-help">销售利润率</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" sideOffset={8} className="max-w-xs z-[9999] bg-white border border-slate-200 shadow-lg p-3">
-                      <div className="space-y-1">
-                        <p className="font-medium text-sm">销售利润率 / Profit Margin</p>
-                        <p className="text-xs text-slate-600">
-                          每卖出1元能赚多少净利润。利润率越高，产品定价空间越大。
-                        </p>
-                        <p className="text-xs text-slate-600">
-                          计算公式：(售价 - 总成本) ÷ 售价 × 100%
-                        </p>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-              <div className={`text-2xl font-bold ${result.profitMargin >= 0 ? "text-green-600" : "text-red-600"}`}>
-                {result.profitMargin.toFixed(1)}%
-              </div>
-            </div>
-          </div>
+          )}
 
           {/* 🔹 竞品价格对比 */}
           {rivalPrice && rivalPrice > 0 && input.targetPriceRMB > 0 ? (
-            <div className="text-center p-4 rounded-xl bg-gradient-to-br from-muted/40 to-muted/10 border">
+            <div className="mb-2 flex items-center justify-between rounded-lg border bg-slate-50 px-3 py-2">
               <div className="text-xs text-muted-foreground mb-1">
                 <TooltipProvider>
                   <Tooltip>
@@ -558,7 +599,7 @@ export function Dashboard({
                 const diff = input.targetPriceRMB - rivalInRMB;
                 return (
                   <>
-                    <div className={`text-2xl font-bold ${isHigher ? "text-green-600" : "text-red-600"}`}>
+                    <div className={`text-base font-bold ${isHigher ? "text-green-600" : "text-red-600"}`}>
                       {isHigher ? "+" : ""}¥{diff.toFixed(2)}
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5">
@@ -570,8 +611,18 @@ export function Dashboard({
             </div>
           ) : null}
 
-          {/* 成本结构环形图 - 外围百分比常显 */}
-          <div className="min-h-64 flex items-center">
+          <button
+            type="button"
+            onClick={() => setChartsExpanded((expanded) => !expanded)}
+            className="flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            <span>图表与压力测试</span>
+            <span>{chartsExpanded ? "收起" : "展开详情"}</span>
+          </button>
+
+          {/* 成本结构环形图 - 默认折叠 */}
+          {chartsExpanded && (
+          <div className="mt-3 flex min-h-56 items-center">
             <div className="w-1/2 h-64 min-w-0">
               <ResponsiveContainer width="100%" height={240} minWidth={240}>
                 <PieChart>
@@ -626,17 +677,18 @@ export function Dashboard({
               </div>
             </div>
           </div>
+          )}
         </CardContent>
       </Card>
 
       {/* 卡片 2：六档定价推荐矩阵 */}
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="shadow-none">
+        <CardHeader className="px-3 py-2">
           <CardTitle className="text-base">六档定价推荐矩阵</CardTitle>
         </CardHeader>
-        <CardContent>
-          {/* 六档定价推荐网格 - 3列 x 2行 */}
-          <div className="grid grid-cols-3 gap-3 mb-6">
+        <CardContent className="px-3 pb-3">
+          {/* 六档定价推荐卡片 */}
+          <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
             {sixTierPricing.map((tier, index) => {
               // 色彩映射
               const colorConfig: Record<string, { border: string; bg: string; text: string; badge: string }> = {
@@ -653,39 +705,39 @@ export function Dashboard({
               return (
                 <div
                   key={index}
-                  className={`p-3 rounded-xl border-2 ${colors.border} ${colors.bg} shadow-sm transition-all hover:shadow-md ${
+                  className={`min-h-[88px] rounded-lg border p-2.5 ${colors.border} ${colors.bg} ${
                     tier.disabled ? "opacity-50" : ""
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-1">
-                    <div className={`text-xs font-medium ${colors.text}`}>{tier.label}</div>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${colors.badge}`}>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className={`truncate text-sm font-bold ${colors.text}`}>{tier.label}</div>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${colors.badge}`}>
                       {tier.profitMargin}%
                     </span>
                   </div>
                   {tier.disabled ? (
-                    <div className="text-sm font-medium text-muted-foreground mt-1">
+                    <div className="flex h-10 items-center rounded-md bg-white/60 px-2 text-xs font-medium text-muted-foreground">
                       {tier.error || "空间不足"}
                     </div>
                   ) : (
                     <>
-                      <div className={`text-lg font-bold ${colors.text} mt-1`}>
+                      <div className={`text-xl font-black leading-none tabular-nums ${colors.text}`}>
                         ¥{tier.priceRMB.toFixed(2)}
                       </div>
-                      <div className={`text-xs text-slate-500 mt-0.5`}>
-                        ≈{tier.priceRUB.toLocaleString()} ₽
+                      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                        <span>≈{tier.priceRUB.toLocaleString()} ₽</span>
+                        <span className="truncate text-right">{tier.description}</span>
                       </div>
                     </>
                   )}
-                  <div className="text-[10px] text-muted-foreground mt-1">
-                    {tier.description}
-                  </div>
                 </div>
               );
             })}
           </div>
 
           {/* 利润演练折线图 - X轴RMB售价 */}
+          {chartsExpanded && (
+          <>
           <div className="h-72 min-h-72 mb-4">
             <h4 className="text-sm font-medium mb-2">利润演练曲线</h4>
             <ResponsiveContainer width="100%" height={240} minWidth={320}>
@@ -711,14 +763,14 @@ export function Dashboard({
                   }}
                   contentStyle={{ fontSize: 12 }}
                 />
-                <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
+                <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
                 <ReferenceLine
                   x={input.targetPriceRMB}
                   stroke="#3b82f6"
                   strokeDasharray="3 3"
                   label={{ value: "当前", fontSize: 10 }}
                 />
-                <Line type="monotone" dataKey="profit" stroke="#10b981" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="profit" stroke="#dc2626" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -729,19 +781,19 @@ export function Dashboard({
             <div className="space-y-2 text-sm">
               <div className="flex justify-between items-center p-2.5 rounded-lg bg-muted/30">
                 <span>当前利润</span>
-                <span className={`font-medium ${result.netProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                <span className={`font-medium ${getFinanceTextClass(result.netProfit)}`}>
                   ¥{result.netProfit.toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between items-center p-2.5 rounded-lg bg-yellow-50/80 border border-yellow-100">
                 <span>汇率下跌 5%</span>
-                <span className={`font-medium ${stressTest.at5PercentDrop >= 0 ? "text-green-600" : "text-red-600"}`}>
+                <span className={`font-medium ${getFinanceTextClass(stressTest.at5PercentDrop)}`}>
                   ¥{stressTest.at5PercentDrop.toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between items-center p-2.5 rounded-lg bg-red-50/80 border border-red-100">
                 <span>汇率下跌 10%</span>
-                <span className={`font-medium ${stressTest.at10PercentDrop >= 0 ? "text-green-600" : "text-red-600"}`}>
+                <span className={`font-medium ${getFinanceTextClass(stressTest.at10PercentDrop)}`}>
                   ¥{stressTest.at10PercentDrop.toFixed(2)}
                 </span>
               </div>
@@ -788,11 +840,9 @@ export function Dashboard({
                   <span>50%</span>
                 </div>
                 {customDropPercent > 0 && (
-                  <div className={`flex justify-between items-center p-2.5 rounded-lg mt-2 ${
-                    customDropProfit >= 0 ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"
-                  }`}>
+                  <div className={`flex justify-between items-center p-2.5 rounded-lg mt-2 ${getFinancePanelClass(customDropProfit)}`}>
                     <span className="text-xs font-medium">汇率下跌 {customDropPercent}% 后利润</span>
-                    <span className={`text-sm font-bold ${customDropProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                    <span className={`text-sm font-bold ${getFinanceTextClass(customDropProfit)}`}>
                       ¥{customDropProfit.toFixed(2)}
                     </span>
                   </div>
@@ -800,6 +850,8 @@ export function Dashboard({
               </div>
             </div>
           </div>
+          </>
+          )}
         </CardContent>
       </Card>
     </div>

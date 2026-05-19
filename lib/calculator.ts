@@ -895,6 +895,58 @@ export function calculateCVRsensitivity(
 }
 
 /**
+ * 税务沙盘：默认不改变系统原有净利润口径，只在开启时给出税后视图。
+ *
+ * 这里采用保守估算：
+ * - 销项税 = 售价 × 增值税率
+ * - 可抵扣进项税 = 采购/头程/包装 × 增值税率
+ * - 企业所得税按扣除增值税后的正利润估算
+ */
+export function calculateTaxSimulation(
+  input: CalculationInput,
+  preTaxNetProfit: number
+): CalculationResult["taxes"] {
+  const enabled = input.taxEnabled === true;
+  const vatRate = Math.max(0, input.vatRate || 0) / 100;
+  const corporateTaxRate = Math.max(0, input.corporateTaxRate || 0) / 100;
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      vatRate: input.vatRate || 0,
+      corporateTaxRate: input.corporateTaxRate || 0,
+      outputVat: 0,
+      inputVatCredit: 0,
+      vatPayable: 0,
+      corporateTax: 0,
+      preTaxNetProfit,
+      afterTaxNetProfit: preTaxNetProfit,
+      afterTaxProfitMargin: input.targetPriceRMB > 0 ? (preTaxNetProfit / input.targetPriceRMB) * 100 : 0,
+    };
+  }
+
+  const outputVat = input.targetPriceRMB * vatRate;
+  const inputVatCredit = (input.purchaseCost + input.domesticShipping + input.packagingFee) * vatRate;
+  const vatPayable = Math.max(0, outputVat - inputVatCredit);
+  const taxableProfit = Math.max(0, preTaxNetProfit - vatPayable);
+  const corporateTax = taxableProfit * corporateTaxRate;
+  const afterTaxNetProfit = preTaxNetProfit - vatPayable - corporateTax;
+
+  return {
+    enabled,
+    vatRate: input.vatRate || 0,
+    corporateTaxRate: input.corporateTaxRate || 0,
+    outputVat,
+    inputVatCredit,
+    vatPayable,
+    corporateTax,
+    preTaxNetProfit,
+    afterTaxNetProfit,
+    afterTaxProfitMargin: input.targetPriceRMB > 0 ? (afterTaxNetProfit / input.targetPriceRMB) * 100 : 0,
+  };
+}
+
+/**
  * 佣金跳档感应
  * 检测当前售价是否处于佣金阶梯跳档点的 ±2% 范围内
  * 
@@ -914,8 +966,10 @@ export function detectCommissionTierBoundary(
   lowerPriceRMB?: number;
   profitIncrease?: number;
 } {
-  // 佣金阶梯边界（RUB）
-  const boundaries = [1500, 5000];
+  const boundaries = commission.tiers
+    .map((tier) => tier.max)
+    .filter((max): max is number => Number.isFinite(max))
+    .sort((a, b) => a - b);
   
   for (const boundary of boundaries) {
     // 计算 ±2% 范围
@@ -1307,6 +1361,8 @@ export function performFullCalculation(
     warnings.push(`当前定价亏损 ¥${Math.abs(netProfit).toFixed(2)}，请提高售价或降低成本！`);
   }
 
+  const taxes = calculateTaxSimulation(input, netProfit);
+
   return {
     netProfit,
     roi,
@@ -1324,6 +1380,7 @@ export function performFullCalculation(
       withdrawalFee: withdrawalFeeAmount,
       total: totalFixedCost + commissionAmount + withdrawalFeeAmount + cpaCost,
     },
+    taxes,
     pricingStrategies,
     recommendedShipping: shippingChannel || DEFAULT_SHIPPING_DATA[0],
     shippingAlternatives: [],

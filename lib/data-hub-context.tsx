@@ -24,6 +24,7 @@ import {
   normalizeCommissionCategory,
   parseCommissionRows,
 } from "./commission-parsing";
+import { parseAlternativeShippingRows } from "./shipping-alternative-parsing";
 
 // 佣金阶梯金额边界
 const TIER_BOUNDARIES = [
@@ -438,7 +439,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               setCommissionData(parsed);
               setCommissionLoaded(true);
               safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
-              const summary: ImportSummary = { type: "commission", rows: rawRows.length, categories: parsed.length };
+              const summary: ImportSummary = {
+                type: "commission",
+                rows: rawRows.length,
+                categories: parsed.length,
+                commissionTierMapped: parsed.reduce((sum, item) => sum + item.tiers.length, 0),
+              };
               setLastImportSummary(summary);
               resolve(summary);
             } catch (e) {
@@ -460,7 +466,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             setCommissionData(parsed);
             setCommissionLoaded(true);
             safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
-            const summary: ImportSummary = { type: "commission", rows: rawRows.length, categories: parsed.length };
+            const summary: ImportSummary = {
+              type: "commission",
+              rows: rawRows.length,
+              categories: parsed.length,
+              commissionTierMapped: parsed.reduce((sum, item) => sum + item.tiers.length, 0),
+            };
             setLastImportSummary(summary);
             resolve(summary);
           } catch (err) {
@@ -492,6 +503,8 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         channels: finalData.length,
         valueRMBMapped: finalData.filter((ch) => ch.minValue !== undefined || ch.maxValue !== undefined).length,
         valueRUBMapped: finalData.filter((ch) => ch.minValueRUB !== undefined || ch.maxValueRUB !== undefined).length,
+        deliveryTimeMapped: finalData.filter((ch) => ch.deliveryTimeMin > 0 || ch.deliveryTimeMax > 0).length,
+        volumetricMapped: finalData.filter((ch) => ch.volumetricDivisor && ch.volumetricDivisor > 0).length,
       });
 
       const parseShippingRows = (rawRows: string[][], sheetName?: string): ShippingChannel[] => {
@@ -620,75 +633,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
        * Header: Лого, Метод, Рейтинг Ozon, Сроки доставки, ПВЗ, Курьер, Батарейки, ..., Fix, Var, Валюта, Мин. Срок, Макс. срок
        */
       const parseAlternativeShippingFormat = (rawRows: string[][]): ShippingChannel[] => {
-        const parsed: ShippingChannel[] = [];
-        const idCounter = new Map<string, number>(); // 跟踪ID出现次数
-        let idx = 0;
-
-        for (let i = 0; i < rawRows.length; i++) {
-          try {
-            const row = rawRows[i];
-            if (row.length < 10) continue;
-
-            const name = row[1]?.trim(); // Метод
-            if (!name || name === "") continue;
-
-            const rating = parseFloat(row[2]) || 0;
-            const timeStr = row[3] || "";
-            const { min: dmin, max: dmax } = parseDeliveryTime(timeStr);
-            const pvzPrice = row[4] || ""; // ПВЗ 价格
-
-            // 从 ПВЗ 价格解析费率
-            const { fixFee, varFeePerGram } = parseShippingRateString(pvzPrice);
-
-            // Fix 和 Var 列
-            const fixCol = row.find((_, ci) => rawRows[0]?.[ci]?.trim() === "Fix");
-            const varCol = row.find((_, ci) => rawRows[0]?.[ci]?.trim() === "Var");
-            const currency = row.find((_, ci) => rawRows[0]?.[ci]?.trim() === "Валюта");
-
-            const serviceLevel = ""; // 备选格式没有服务等级
-            let uniqueId = generateShippingUniqueId(name, serviceLevel);
-            
-            // 处理重复ID：添加序号后缀
-            const count = idCounter.get(uniqueId) || 0;
-            if (count > 0) {
-              uniqueId = `${uniqueId}_${count + 1}`;
-            }
-            idCounter.set(generateShippingUniqueId(name, serviceLevel), count + 1);
-
-            idx++;
-            parsed.push({
-              id: uniqueId,
-              name,
-              thirdParty: name.split(" ")[0] || "",
-              serviceTier: "",
-              serviceLevel,
-              fixFee,
-              varFeePerGram,
-              pricePerKg: fixFee + varFeePerGram * 1000,
-              pricePerCubic: 0,
-              minWeight: 0,
-              maxWeight: 999999,
-              maxLength: 999,
-              maxWidth: 999,
-              maxHeight: 999,
-              maxSumDimension: 9999,
-              deliveryTimeMin: dmin,
-              deliveryTimeMax: dmax,
-              deliveryTime: Math.round((dmin + dmax) / 2),
-              maxValueRUB: 999999,
-              maxValue: 999999,
-              billingType: "实际重量",
-              volumetricDivisor: 0,
-              ozonRating: rating,
-              batteryAllowed: row[6]?.includes("Разрешено") || false,
-              liquidAllowed: false,
-            });
-          } catch (error) {
-            console.warn(`[物流解析警告-备选格式] 第 ${i + 1} 行解析失败:`, rawRows[i], error);
-          }
-        }
-
-        return parsed;
+        return parseAlternativeShippingRows(rawRows);
       };
 
       if (ext === "xlsx" || ext === "xls") {

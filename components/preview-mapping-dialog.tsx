@@ -162,6 +162,11 @@ export function PreviewMappingDialog({
   });
   
   const canConfirm = missingRequired.length === 0 && parsedData.errors.length === 0;
+  const highRiskFields = dataType === "shipping"
+    ? ["volumetricDivisor", "minValue", "maxValue", "minValueRUB", "maxValueRUB", "batteryAllowed", "liquidAllowed"]
+        .map((field) => mappings.find((mapping) => mapping.systemField === field))
+        .filter((mapping): mapping is FieldMapping => mapping !== undefined && mapping.columnIndex === -1)
+    : [];
   
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -219,6 +224,19 @@ export function PreviewMappingDialog({
               </div>
             )}
           </div>
+
+          {highRiskFields.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+              <div className="mb-1 flex items-center gap-1 font-bold">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                高风险字段未映射
+              </div>
+              <div className="leading-relaxed">
+                {highRiskFields.map((field) => getFieldLabel(field.systemField)).join("、")}
+                未映射会影响体积重、货值上下限、带电/带液拦截判断。可以继续导入，但这些判断会降级或依赖默认值。
+              </div>
+            </div>
+          )}
           
           {/* 🔹 三列动态映射面板 */}
           <div className="border border-slate-200 rounded-lg overflow-hidden text-xs">

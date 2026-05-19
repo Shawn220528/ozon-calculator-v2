@@ -3,10 +3,18 @@
  * 提供佣金表和物流表的标准CSV模板
  */
 
+function csvEscape(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function rowsToCsv(rows: string[][]): string {
+  return rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+}
+
 /**
- * 生成并下载标准佣金表模板
+ * 生成标准佣金表模板内容
  */
-export function downloadCommissionTemplate(): void {
+export function getCommissionTemplateCsv(): string {
   const headers = [
     "一级类目",
     "二级类目",
@@ -22,12 +30,14 @@ export function downloadCommissionTemplate(): void {
     ["美容", "美容与健康", "12%", "14%", "18%"],
   ];
 
-  const csvContent = [
-    headers.join(","),
-    ...exampleData.map(row => row.join(",")),
-  ].join("\n");
+  return rowsToCsv([headers, ...exampleData]);
+}
 
-  downloadCSV(csvContent, "ozon_commission_template.csv");
+/**
+ * 生成并下载标准佣金表模板
+ */
+export function downloadCommissionTemplate(): void {
+  downloadCSV(getCommissionTemplateCsv(), "ozon_commission_template.csv");
 }
 
 /**
@@ -38,31 +48,32 @@ export function downloadCommissionTemplate(): void {
  * - 货值: 1501 - 7000（带空格）
  * - 体积重: ÷ 12 000（千分位空格）
  */
-export function downloadShippingTemplate(): void {
+export function getShippingTemplateCsv(): string {
   const headers = [
-    "配送方式",
-    "服务等级",
     "评分组",
+    "服务等级",
     "第三方物流",
-    "评级",
-    "时效(天)",
-    "费率(固定+变动)",
+    "配送方式",
+    "Ozon评级",
+    "时效限制（从PUDO揽收点到Ozon分拣中心），天",
+    "费率（PUDO揽收点揽收/快递员上门揽收）",
     "电池",
     "液体",
-    "尺寸限制",
-    "最小重量(g)",
-    "最大重量(g)",
-    "货值限制-卢布",
-    "货值限制-人民币",
+    "尺寸限制，最大（厘米）",
+    "货件重量限制 / 最小（克）",
+    "货件重量限制 / 最大（克）",
+    "货值限制/最低-最高（卢布）",
+    "货值限制/最低-最高（人民币）",
     "计费类型",
+    "体积重量计算方式",
   ];
 
   const exampleData = [
     [
-      "RETS Express Extra Small",
-      "Express",
       "Extra Small",
+      "Express",
       "RETS",
+      "RETS Express Extra Small",
       "1",
       "5-14",
       "¥3.12 + ¥0.0468/1g",
@@ -74,12 +85,13 @@ export function downloadShippingTemplate(): void {
       "1 - 1500",
       "0.01 - 135",
       "实际重量",
+      "",
     ],
     [
-      "CDEK Standard Big",
-      "Standard",
       "Big",
+      "Standard",
       "CDEK",
+      "CDEK Standard Big",
       "3",
       "10-25",
       "¥5.00 + ¥0.0600/1g",
@@ -91,12 +103,13 @@ export function downloadShippingTemplate(): void {
       "1 - 100000",
       "0.01 - 8200",
       "实际重量",
+      "",
     ],
     [
-      "GBS Volumetric Big",
-      "Standard",
       "Big",
+      "Standard",
       "GBS",
+      "GBS Volumetric Big",
       "6",
       "8-20",
       "¥8.00 + ¥0.0350/1g",
@@ -108,21 +121,24 @@ export function downloadShippingTemplate(): void {
       "1501 - 7000",
       "100 - 500",
       "取大 ÷ 12 000",
+      "÷ 12 000",
     ],
   ];
 
-  const csvContent = [
-    headers.join(","),
-    ...exampleData.map(row => row.map(cell => `"${cell}"`).join(",")),
-  ].join("\n");
+  return rowsToCsv([headers, ...exampleData]);
+}
 
-  downloadCSV(csvContent, "ozon_shipping_template.csv");
+/**
+ * 生成并下载标准物流表模板
+ */
+export function downloadShippingTemplate(): void {
+  downloadCSV(getShippingTemplateCsv(), "ozon_shipping_template.csv");
 }
 
 /**
  * 生成并下载批量计算模板
  */
-export function downloadBatchTemplate(): void {
+export function getBatchTemplateCsv(): string {
   const headers = [
     "SKU编号",
     "一级类目",
@@ -146,12 +162,14 @@ export function downloadBatchTemplate(): void {
     ["SKU003", "家居", "收纳盒", "20", "15", "10", "200", "15", "2", "1", "否", "否", "80", ""],
   ];
 
-  const csvContent = [
-    headers.join(","),
-    ...exampleData.map(row => row.join(",")),
-  ].join("\n");
+  return rowsToCsv([headers, ...exampleData]);
+}
 
-  downloadCSV(csvContent, "ozon_batch_template.csv");
+/**
+ * 生成并下载批量计算模板
+ */
+export function downloadBatchTemplate(): void {
+  downloadCSV(getBatchTemplateCsv(), "ozon_batch_template.csv");
 }
 
 /**

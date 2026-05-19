@@ -131,6 +131,20 @@ export interface CalculationResult {
     withdrawalFee: number;
     total: number;
   };
+
+  // 税务模拟（仅在 taxEnabled 开启时影响税后展示，不改变默认净利口径）
+  taxes?: {
+    enabled: boolean;
+    vatRate: number;
+    corporateTaxRate: number;
+    outputVat: number;
+    inputVatCredit: number;
+    vatPayable: number;
+    corporateTax: number;
+    preTaxNetProfit: number;
+    afterTaxNetProfit: number;
+    afterTaxProfitMargin: number;
+  };
   
   // 定价策略
   pricingStrategies: {
@@ -188,8 +202,11 @@ export interface ImportSummary {
   rows: number;
   channels?: number;
   categories?: number;
+  commissionTierMapped?: number;
   valueRMBMapped?: number;
   valueRUBMapped?: number;
+  deliveryTimeMapped?: number;
+  volumetricMapped?: number;
   deliveryDateCorrections?: number;
   warnings?: string[];
 }

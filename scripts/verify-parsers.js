@@ -1,29 +1,6 @@
-const fs = require("node:fs");
 const path = require("node:path");
-const vm = require("node:vm");
-const ts = require("typescript");
-
-function loadTsModule(relativePath) {
-  const sourcePath = path.join(__dirname, "..", relativePath);
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2020,
-      esModuleInterop: true,
-    },
-  });
-
-  const sandbox = {
-    exports: {},
-    module: { exports: {} },
-    require,
-    console,
-  };
-  sandbox.exports = sandbox.module.exports;
-  vm.runInNewContext(output.outputText, sandbox, { filename: sourcePath });
-  return sandbox.module.exports;
-}
+const Papa = require("papaparse");
+const { loadTsModule } = require("./ts-module-loader");
 
 const {
   normalizeLimitValue,
@@ -38,6 +15,20 @@ const {
   parseCommissionRows,
 } = loadTsModule(path.join("lib", "commission-parsing.ts"));
 
+const {
+  parseBatchInput,
+} = loadTsModule(path.join("lib", "batch-parsing.ts"));
+
+const {
+  parseAlternativeShippingRows,
+} = loadTsModule(path.join("lib", "shipping-alternative-parsing.ts"));
+
+const {
+  getBatchTemplateCsv,
+  getCommissionTemplateCsv,
+  getShippingTemplateCsv,
+} = loadTsModule(path.join("lib", "template-export.ts"));
+
 function assertDeepEqual(actual, expected, label) {
   const a = JSON.stringify(actual);
   const e = JSON.stringify(expected);
@@ -50,6 +41,21 @@ function assertEqual(actual, expected, label) {
   if (actual !== expected) {
     throw new Error(`${label}\nexpected ${expected}\nactual   ${actual}`);
   }
+}
+
+function assertCsvRowsAligned(csvContent, label) {
+  const parsed = Papa.parse(csvContent, {
+    header: false,
+    skipEmptyLines: true,
+  });
+  if (parsed.errors.length > 0) {
+    throw new Error(`${label} CSV parse errors: ${parsed.errors.map((error) => error.message).join("; ")}`);
+  }
+  const rows = parsed.data;
+  const headerLength = rows[0].length;
+  rows.forEach((row, index) => {
+    assertEqual(row.length, headerLength, `${label} row ${index + 1} column count`);
+  });
 }
 
 [
@@ -110,6 +116,60 @@ assertDeepEqual(
     ],
   },
   "commission template parsing"
+);
+
+const batchCsv = [
+  "SKU,一级类目,二级类目,长度,宽度,高度,重量,采购成本,前台售价",
+  'A1,家居与汽车用品,"装饰、清洁与储物",20,15,10,300,"12,50",125',
+].join("\r\n");
+const batchResult = parseBatchInput(batchCsv);
+assertDeepEqual(batchResult.errors, [], "batch CSV should parse quoted comma cells");
+assertDeepEqual(
+  batchResult.rows[0],
+  {
+    sku: "A1",
+    primaryCategory: "家居与汽车用品",
+    secondaryCategory: "装饰、清洁与储物",
+    length: 20,
+    width: 15,
+    height: 10,
+    weight: 300,
+    purchaseCost: 12.5,
+    targetPriceRMB: 125,
+  },
+  "batch CSV row parsing"
+);
+
+const incompleteBatch = parseBatchInput([
+  "SKU,一级类目,二级类目,重量,目标售价",
+  "MISS1,电子产品,手机配件,,abc",
+].join("\n"));
+assertEqual(incompleteBatch.rows.length, 1, "incomplete batch row should still be visible for diagnostics");
+assertEqual(incompleteBatch.errors.length, 1, "incomplete batch row should report missing core fields");
+
+assertCsvRowsAligned(getCommissionTemplateCsv(), "commission template");
+assertCsvRowsAligned(getShippingTemplateCsv(), "shipping template");
+assertCsvRowsAligned(getBatchTemplateCsv(), "batch template");
+const batchTemplateResult = parseBatchInput(getBatchTemplateCsv());
+assertDeepEqual(batchTemplateResult.errors, [], "batch template should parse without errors");
+assertEqual(batchTemplateResult.rows.length, 3, "batch template sample row count");
+assertEqual(batchTemplateResult.rows[0].targetPriceRMB, 125, "batch template target price");
+
+const alternativeShipping = parseAlternativeShippingRows([
+  ["Лого", "Метод", "Рейтинг Ozon", "Сроки доставки", "ПВЗ", "Курьер", "Батарейки"],
+  ["", "Test Standard", "4.8", "2026/5/14", "¥2,6 + ¥0,035/1g", "", "Разрешено", "", "", ""],
+])[0];
+assertEqual(alternativeShipping.deliveryTimeMin, 5, "alternative shipping date min");
+assertEqual(alternativeShipping.deliveryTimeMax, 14, "alternative shipping date max");
+assertDeepEqual(
+  {
+    fixFee: alternativeShipping.fixFee,
+    varFeePerGram: alternativeShipping.varFeePerGram,
+    maxValue: alternativeShipping.maxValue,
+    maxValueRUB: alternativeShipping.maxValueRUB,
+  },
+  { fixFee: 2.6, varFeePerGram: 0.035 },
+  "alternative shipping should not create fake value limits"
 );
 
 console.log("Parser verification passed.");

@@ -1,11 +1,9 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
-import { Package, Truck, Megaphone, Tag, AlertTriangle, RotateCcw, Battery, Droplets, CheckCircle2, DollarSign, Lock, Unlock } from "lucide-react";
+import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { Package, Truck, Megaphone, Tag, AlertTriangle, RotateCcw, Battery, Droplets, CheckCircle2, DollarSign, Lock, Unlock, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Tooltip,
   TooltipContent,
@@ -150,26 +148,62 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
   };
 
   const selectedCategory = categories.find((c) => c.primary === input.primaryCategory);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    product: true,
+    pricing: true,
+  });
+  const Section = ({
+    id,
+    title,
+    summary,
+    icon,
+    defaultOpen = false,
+    children,
+  }: {
+    id: string;
+    title: string;
+    summary: string;
+    icon: ReactNode;
+    defaultOpen?: boolean;
+    children: ReactNode;
+  }) => (
+    <details
+      open={openSections[id] ?? defaultOpen}
+      className="group rounded-lg border bg-card text-card-foreground shadow-none"
+      onToggle={(event) => {
+        const isOpen = event.currentTarget.open;
+        setOpenSections((current) => current[id] === isOpen ? current : { ...current, [id]: isOpen });
+      }}
+    >
+      <summary className="flex h-9 cursor-pointer list-none items-center justify-between gap-2 px-2.5 text-sm font-semibold">
+        <span className="flex min-w-0 items-center gap-2">
+          {icon}
+          <span className="shrink-0">{title}</span>
+          <span className="truncate text-[11px] font-medium text-muted-foreground">{summary}</span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-slate-100 p-2.5">{children}</div>
+    </details>
+  );
 
   return (
-    <div className="space-y-5 overflow-y-auto max-h-[calc(100vh-6rem)] pr-1 scrollbar-thin">
+    <div className="space-y-2 pr-1">
 
       {/* 模块 A：商品参数与物流拦截 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Package className="h-4 w-4" />
-            商品参数与物流拦截
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 max-h-[400px] overflow-y-auto scrollbar-thin"
-          onWheel={(e) => e.stopPropagation()}
-        >
-          <div className="grid grid-cols-2 gap-3">
+      <Section
+        id="product"
+        title="商品属性"
+        summary={`${input.length}×${input.width}×${input.height}cm / ${input.weight}g`}
+        icon={<Package className="h-4 w-4" />}
+        defaultOpen
+      >
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs">一级类目</Label>
               <Select value={input.primaryCategory} onValueChange={handlePrimaryCategoryChange}>
-                <SelectTrigger className="h-9 text-sm">
+                <SelectTrigger className="h-8 text-sm">
                   <SelectValue placeholder="选择一级类目" />
                 </SelectTrigger>
                 <SelectContent>
@@ -187,7 +221,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 value={input.secondaryCategory}
                 onValueChange={(v) => updateField("secondaryCategory", v)}
               >
-                <SelectTrigger className="h-9 text-sm">
+                <SelectTrigger className="h-8 text-sm">
                   <SelectValue placeholder="选择二级类目" />
                 </SelectTrigger>
                 <SelectContent>
@@ -201,7 +235,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs">长 (cm)</Label>
               <Input
@@ -210,7 +244,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.1"
                 value={input.length || input.length === 0 ? input.length : ""}
                 onChange={(e) => updateField("length", parseFloat(e.target.value) || 0)}
-                className="h-9 text-sm"
+                className="h-8 text-sm"
               />
             </div>
             <div className="space-y-1.5">
@@ -221,7 +255,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.1"
                 value={input.width || input.width === 0 ? input.width : ""}
                 onChange={(e) => updateField("width", parseFloat(e.target.value) || 0)}
-                className="h-9 text-sm"
+                className="h-8 text-sm"
               />
             </div>
             <div className="space-y-1.5">
@@ -232,7 +266,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.1"
                 value={input.height || input.height === 0 ? input.height : ""}
                 onChange={(e) => updateField("height", parseFloat(e.target.value) || 0)}
-                className="h-9 text-sm"
+                className="h-8 text-sm"
               />
             </div>
           </div>
@@ -245,19 +279,19 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               step="1"
               value={input.weight || input.weight === 0 ? input.weight : ""}
               onChange={(e) => updateField("weight", parseFloat(e.target.value) || 0)}
-              className="h-9 text-sm"
+              className="h-8 text-sm"
             />
             {/* 🔹 计抛预警：仅在 isVolumetric && billingWeight > actualWeight 时显示 - 强烈橙色 */}
             {volWarningActive && selectedBillingInfo && (
-              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-100 border-3 border-amber-500 shadow-xl animate-warning-pulse">
-                <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
                 <div className="flex-1">
-                  <div className="text-sm font-bold text-amber-800">
+                  <div className="text-xs font-bold text-amber-800">
                     ⚠️ 计抛预警
                   </div>
                   <div className="text-xs text-amber-700 mt-1">
                     <div>抛重 <span className="font-bold bg-amber-200 px-1.5 rounded">{selectedBillingInfo.volumetricWeight.toFixed(0)}g</span> &gt; 实重 <span className="font-bold bg-amber-200 px-1.5 rounded">{selectedBillingInfo.actualWeight.toFixed(0)}g</span></div>
-                    <div className="mt-1">计费重: <span className="font-bold text-lg">{selectedBillingInfo.billingWeight.toFixed(0)}g</span></div>
+                    <div className="mt-1">计费重: <span className="font-bold">{selectedBillingInfo.billingWeight.toFixed(0)}g</span></div>
                   </div>
                   <div className="text-[10px] text-amber-600 mt-1.5 font-mono bg-amber-50 p-1 rounded">
                     {input.length}×{input.width}×{input.height} / {divisor} × 1000 = {selectedBillingInfo.volumetricWeight.toFixed(0)}g
@@ -307,19 +341,18 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               <span>{input.hasLiquid ? "带液" : "不带液"}</span>
             </button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </Section>
 
       {/* 模块 B：供应链与损耗成本 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Truck className="h-4 w-4" />
-            供应链与损耗成本
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-3 gap-3">
+      <Section
+        id="cost"
+        title="成本物流"
+        summary={`采购 ¥${input.purchaseCost || 0} / 头程 ¥${input.domesticShipping || 0} / 包装 ¥${input.packagingFee || 0}`}
+        icon={<Truck className="h-4 w-4" />}
+      >
+        <div className="space-y-2">
+          <div className="grid grid-cols-3 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs">采购成本</Label>
               <Input
@@ -328,7 +361,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.01"
                 value={input.purchaseCost || ""}
                 onChange={(e) => updateField("purchaseCost", parseFloat(e.target.value) || 0)}
-                className="h-9 text-sm"
+                className="h-8 text-sm"
               />
             </div>
             <div className="space-y-1.5">
@@ -339,7 +372,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.01"
                 value={input.domesticShipping || ""}
                 onChange={(e) => updateField("domesticShipping", parseFloat(e.target.value) || 0)}
-                className="h-9 text-sm"
+                className="h-8 text-sm"
               />
             </div>
             <div className="space-y-1.5">
@@ -350,14 +383,14 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.01"
                 value={input.packagingFee || ""}
                 onChange={(e) => updateField("packagingFee", parseFloat(e.target.value) || 0)}
-                className="h-9 text-sm"
+                className="h-8 text-sm"
               />
             </div>
           </div>
 
           <div className="space-y-2">
             <Label className="text-xs font-medium">退货损耗沙盘</Label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">预期退货率</Label>
                 <Input
@@ -367,7 +400,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   step="0.5"
                   value={input.returnRate || ""}
                   onChange={(e) => updateField("returnRate", parseFloat(e.target.value) || 0)}
-                  className="h-9 text-sm"
+                  className="h-8 text-sm"
                 />
               </div>
               <div className="space-y-1.5">
@@ -376,7 +409,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   value={input.returnHandling}
                   onValueChange={(v) => updateField("returnHandling", v as CalculationInput["returnHandling"])}
                 >
-                  <SelectTrigger className="h-9 text-sm">
+                  <SelectTrigger className="h-8 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -388,18 +421,17 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </Section>
 
       {/* 模块 C：高阶广告 ROI 控制台 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Megaphone className="h-4 w-4" />
-            高阶广告 ROI 控制台
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <Section
+        id="ads"
+        title="广告退货"
+        summary={`${input.cpaEnabled ? "CPA开" : "CPA关"} / ${input.cpcEnabled ? "CPC开" : "CPC关"} / 退货 ${input.returnRate || 0}%`}
+        icon={<Megaphone className="h-4 w-4" />}
+      >
+        <div className="space-y-2">
           {/* CPA */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -457,7 +489,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               </button>
             </div>
             <div className={`transition-opacity ${input.cpcEnabled ? "opacity-100" : "opacity-40 pointer-events-none"}`}>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
                   <Label className="text-xs text-muted-foreground">单次竞价 (₽)</Label>
                   <div className="relative">
@@ -581,20 +613,20 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </Section>
 
       {/* 模块 D：前台定价与营销缓冲 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Tag className="h-4 w-4" />
-            前台定价与营销缓冲
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <Section
+        id="pricing"
+        title="售价税务"
+        summary={`售价 ¥${input.targetPriceRMB || 0} / ${input.taxEnabled ? "含税" : "税前"}`}
+        icon={<Tag className="h-4 w-4" />}
+        defaultOpen
+      >
+        <div className="space-y-2">
           {/* 三向联动输入组：RMB / RUB / 利润率 */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2">
             {/* RMB 售价 */}
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">前台售价 (RMB)</Label>
@@ -613,7 +645,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                       updateField("targetPriceRMB", parseFloat(val) || 0);
                     }
                   }}
-                  className="h-9 text-sm pl-6"
+                  className="h-8 text-sm pl-6"
                   placeholder="0"
                 />
               </div>
@@ -662,7 +694,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                       updateField("targetPriceRMB", parseFloat(rmbValue.toFixed(4)));
                     }
                   }}
-                  className="h-9 text-sm pl-6"
+                  className="h-8 text-sm pl-6"
                   placeholder="0"
                 />
               </div>
@@ -717,7 +749,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                       }
                     }
                   }}
-                  className={`h-9 text-sm pl-6 ${marginError ? "border-red-400 focus-visible:ring-red-400" : ""} ${lockedMargin !== null ? "bg-amber-50/50 cursor-not-allowed" : ""}`}
+                  className={`h-8 text-sm pl-6 ${marginError ? "border-red-400 focus-visible:ring-red-400" : ""} ${lockedMargin !== null ? "bg-amber-50/50 cursor-not-allowed" : ""}`}
                   placeholder="0"
                   disabled={lockedMargin !== null}
                 />
@@ -739,7 +771,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.01"
                 value={rivalPrice || ""}
                 onChange={(e) => updateField("rivalPrice", parseFloat(e.target.value) || 0)}
-                className="h-9 text-sm flex-1"
+                className="h-8 text-sm flex-1"
                 placeholder="输入竞品售价"
               />
               <div className="flex rounded-lg overflow-hidden border">
@@ -806,7 +838,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               step="1"
               value={input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined ? input.profitWarningThreshold : ""}
               onChange={(e) => updateField("profitWarningThreshold", e.target.value === "" ? null : parseFloat(e.target.value) || null)}
-              className="h-9 text-sm"
+              className="h-8 text-sm"
               placeholder="留空关闭预警"
             />
             {input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined && currentProfitMargin !== undefined && (
@@ -824,7 +856,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               step="1"
               value={input.promotionDiscount || ""}
               onChange={(e) => updateField("promotionDiscount", parseFloat(e.target.value) || 0)}
-              className="h-9 text-sm"
+              className="h-8 text-sm"
             />
             {input.promotionDiscount > 0 && input.targetPriceRMB > 0 && (
               <div className="text-xs text-muted-foreground p-2 rounded-md bg-muted/30">
@@ -833,6 +865,70 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 {" "}(≈{(input.targetPriceRMB / (1 - input.promotionDiscount / 100) * input.exchangeRate).toFixed(0)} ₽)
               </div>
             )}
+          </div>
+
+          {/* 🔹 税务模拟 */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs font-medium">税务模拟</Label>
+                <div className={`text-[10px] mt-0.5 ${input.taxEnabled ? "text-emerald-700" : "text-muted-foreground"}`}>
+                  {input.taxEnabled ? "已开启：Dashboard 将展示税后净利" : "已关闭：当前使用默认税前口径"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => updateField("taxEnabled", !input.taxEnabled)}
+                className={`relative inline-flex h-8 w-[76px] shrink-0 items-center rounded-full border-2 px-1 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                  input.taxEnabled
+                    ? "border-emerald-600 bg-emerald-600 text-white focus:ring-emerald-300"
+                    : "border-slate-300 bg-slate-200 text-slate-500 focus:ring-slate-300"
+                }`}
+                aria-pressed={input.taxEnabled}
+                aria-label={input.taxEnabled ? "关闭税务模拟" : "开启税务模拟"}
+                data-testid="tax-toggle"
+              >
+                <span
+                  className={`absolute h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                    input.taxEnabled ? "translate-x-[42px]" : "translate-x-0"
+                  }`}
+                />
+                <span className={`relative z-10 flex-1 text-center text-[10px] font-extrabold ${input.taxEnabled ? "opacity-0" : "opacity-100"}`}>
+                  OFF
+                </span>
+                <span className={`relative z-10 flex-1 text-center text-[10px] font-extrabold ${input.taxEnabled ? "opacity-100" : "opacity-0"}`}>
+                  ON
+                </span>
+              </button>
+            </div>
+            <div className={`grid grid-cols-2 gap-2 ${input.taxEnabled ? "opacity-100" : "opacity-45"}`}>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">增值税率 (%)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={input.vatRate || ""}
+                  onChange={(e) => updateField("vatRate", parseFloat(e.target.value) || 0)}
+                  className="h-8 text-sm"
+                  disabled={!input.taxEnabled}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">企业所得税 (%)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={input.corporateTaxRate || ""}
+                  onChange={(e) => updateField("corporateTaxRate", parseFloat(e.target.value) || 0)}
+                  className="h-8 text-sm"
+                  disabled={!input.taxEnabled}
+                />
+              </div>
+            </div>
           </div>
           
           {/* 🔹 多件装购买数量 */}
@@ -854,11 +950,11 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               step="1"
               value={input.multiItemCount || 1}
               onChange={(e) => updateField("multiItemCount", Math.max(1, parseInt(e.target.value) || 1))}
-              className="h-9 text-sm"
+              className="h-8 text-sm"
             />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </Section>
     </div>
   );
 }
