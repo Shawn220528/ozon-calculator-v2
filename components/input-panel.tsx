@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useRef, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { Package, Truck, Megaphone, Tag, AlertTriangle, RotateCcw, Battery, Droplets, CheckCircle2, DollarSign, Lock, Unlock, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -84,6 +84,47 @@ interface InputPanelProps {
   } | null;
 }
 
+function Section({
+  id,
+  title,
+  summary,
+  icon,
+  defaultOpen = false,
+  openSections,
+  setOpenSections,
+  children,
+}: {
+  id: string;
+  title: string;
+  summary: string;
+  icon: ReactNode;
+  defaultOpen?: boolean;
+  openSections: Record<string, boolean>;
+  setOpenSections: Dispatch<SetStateAction<Record<string, boolean>>>;
+  children: ReactNode;
+}) {
+  return (
+    <details
+      open={openSections[id] ?? defaultOpen}
+      className="group rounded-lg border bg-card text-card-foreground shadow-none"
+      onToggle={(event) => {
+        const isOpen = event.currentTarget.open;
+        setOpenSections((current) => current[id] === isOpen ? current : { ...current, [id]: isOpen });
+      }}
+    >
+      <summary className="flex h-9 cursor-pointer list-none items-center justify-between gap-2 px-2.5 text-sm font-semibold">
+        <span className="flex min-w-0 items-center gap-2">
+          {icon}
+          <span className="shrink-0">{title}</span>
+          <span className="truncate text-[11px] font-medium text-muted-foreground">{summary}</span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="border-t border-slate-100 p-2.5">{children}</div>
+    </details>
+  );
+}
+
 export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = 'RMB', currentProfitMargin, onReversePriceFromMargin, marginError, onReset, adRiskControl, shippingData = [], selectedBillingInfo, lockedMargin = null, onToggleMarginLock, suggestedPriceInfo }: InputPanelProps) {
   const { getCategories } = useDataHub();
   const categories = useMemo(() => getCategories(), [getCategories]);
@@ -152,40 +193,6 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     product: true,
     pricing: true,
   });
-  const Section = ({
-    id,
-    title,
-    summary,
-    icon,
-    defaultOpen = false,
-    children,
-  }: {
-    id: string;
-    title: string;
-    summary: string;
-    icon: ReactNode;
-    defaultOpen?: boolean;
-    children: ReactNode;
-  }) => (
-    <details
-      open={openSections[id] ?? defaultOpen}
-      className="group rounded-lg border bg-card text-card-foreground shadow-none"
-      onToggle={(event) => {
-        const isOpen = event.currentTarget.open;
-        setOpenSections((current) => current[id] === isOpen ? current : { ...current, [id]: isOpen });
-      }}
-    >
-      <summary className="flex h-9 cursor-pointer list-none items-center justify-between gap-2 px-2.5 text-sm font-semibold">
-        <span className="flex min-w-0 items-center gap-2">
-          {icon}
-          <span className="shrink-0">{title}</span>
-          <span className="truncate text-[11px] font-medium text-muted-foreground">{summary}</span>
-        </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180" />
-      </summary>
-      <div className="border-t border-slate-100 p-2.5">{children}</div>
-    </details>
-  );
 
   return (
     <div className="space-y-2 pr-1">
@@ -196,6 +203,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         title="商品属性"
         summary={`${input.length}×${input.width}×${input.height}cm / ${input.weight}g`}
         icon={<Package className="h-4 w-4" />}
+        openSections={openSections}
+        setOpenSections={setOpenSections}
         defaultOpen
       >
         <div className="space-y-2">
@@ -350,6 +359,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         title="成本物流"
         summary={`采购 ¥${input.purchaseCost || 0} / 头程 ¥${input.domesticShipping || 0} / 包装 ¥${input.packagingFee || 0}`}
         icon={<Truck className="h-4 w-4" />}
+        openSections={openSections}
+        setOpenSections={setOpenSections}
       >
         <div className="space-y-2">
           <div className="grid grid-cols-3 gap-2">
@@ -430,6 +441,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         title="广告退货"
         summary={`${input.cpaEnabled ? "CPA开" : "CPA关"} / ${input.cpcEnabled ? "CPC开" : "CPC关"} / 退货 ${input.returnRate || 0}%`}
         icon={<Megaphone className="h-4 w-4" />}
+        openSections={openSections}
+        setOpenSections={setOpenSections}
       >
         <div className="space-y-2">
           {/* CPA */}
@@ -622,6 +635,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         title="售价税务"
         summary={`售价 ¥${input.targetPriceRMB || 0} / ${input.taxEnabled ? "含税" : "税前"}`}
         icon={<Tag className="h-4 w-4" />}
+        openSections={openSections}
+        setOpenSections={setOpenSections}
         defaultOpen
       >
         <div className="space-y-2">
