@@ -16,6 +16,7 @@ import {
   Filter,
   Truck,
   X,
+  Copy,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -37,6 +38,7 @@ import { CalculationResult, CalculationInput, ShippingChannel } from "@/lib/type
 import { calculateShippingCost } from "@/lib/data-hub-context";
 import { calculateExchangeRateStressTest, getCommissionRate, calculateMarginalContribution, calculateNetProfit, detectShippingDimensionLimits } from "@/lib/calculator";
 import { cnyToRub, rubToCny } from "@/lib/currency";
+import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
 import {
   PieChart,
   Pie,
@@ -95,6 +97,7 @@ interface DashboardProps {
     secondaryCategory: string;
     tiers: Array<{ min: number; max: number; rate: number }>;
   };
+  onCopyOzonPrice?: (label: string, value: string) => void;
 }
 
 const COST_COLORS = ["#6366F1", "#F59E0B", "#8B5CF6", "#EF4444", "#10B981", "#EC4899"];
@@ -128,6 +131,7 @@ export function Dashboard({
   multiItemProfit,
   sixTierPricing,
   commission,
+  onCopyOzonPrice,
 }: DashboardProps) {
   const E = input.exchangeRate; // CNY/RUB (1 CNY = X RUB)
   const [advisorExpanded, setAdvisorExpanded] = useState(false);
@@ -697,11 +701,12 @@ export function Dashboard({
               };
               
               const colors = colorConfig[tier.color] || colorConfig.green;
+              const ozonTierPricing = calculateOzonBackendPricing(tier.priceRMB, input.exchangeRate);
               
               return (
                 <div
                   key={index}
-                  className={`min-h-[88px] rounded-lg border p-2.5 ${colors.border} ${colors.bg} ${
+                  className={`min-h-[132px] rounded-lg border p-2.5 ${colors.border} ${colors.bg} ${
                     tier.disabled ? "opacity-50" : ""
                   }`}
                 >
@@ -724,6 +729,35 @@ export function Dashboard({
                         <span>≈{tier.priceRUB.toLocaleString()} ₽</span>
                         <span className="truncate text-right">{tier.description}</span>
                       </div>
+                      {ozonTierPricing.isValid && (
+                        <div className="mt-2 rounded-md border border-white/70 bg-white/70 px-2 py-1.5">
+                          <div className="flex items-center justify-between gap-2 text-[10px] font-semibold text-slate-600">
+                            <span>后台 ¥{ozonTierPricing.ozonBackendPriceRMB.toFixed(2)}</span>
+                            <button
+                              type="button"
+                              onClick={() => onCopyOzonPrice?.(`${tier.label} 后台定价`, ozonTierPricing.ozonBackendPriceRMB.toFixed(2))}
+                              className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              title="复制后台定价"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                            <span>折前 ¥{ozonTierPricing.ozonOriginalPriceRMB.toFixed(2)}</span>
+                            <button
+                              type="button"
+                              onClick={() => onCopyOzonPrice?.(`${tier.label} 折扣前价格`, ozonTierPricing.ozonOriginalPriceRMB.toFixed(2))}
+                              className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              title="复制折扣前价格"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <div className="mt-0.5 text-[10px] text-slate-400">
+                            ≈ ₽{ozonTierPricing.ozonBackendPriceRUB.toLocaleString()} / ₽{ozonTierPricing.ozonOriginalPriceRUB.toLocaleString()}
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

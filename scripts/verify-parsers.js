@@ -29,6 +29,10 @@ const {
   getShippingTemplateCsv,
 } = loadTsModule(path.join("lib", "template-export.ts"));
 
+const {
+  calculateOzonBackendPricing,
+} = loadTsModule(path.join("lib", "ozon-pricing.ts"));
+
 function assertDeepEqual(actual, expected, label) {
   const a = JSON.stringify(actual);
   const e = JSON.stringify(expected);
@@ -154,6 +158,22 @@ const batchTemplateResult = parseBatchInput(getBatchTemplateCsv());
 assertDeepEqual(batchTemplateResult.errors, [], "batch template should parse without errors");
 assertEqual(batchTemplateResult.rows.length, 3, "batch template sample row count");
 assertEqual(batchTemplateResult.rows[0].targetPriceRMB, 125, "batch template target price");
+
+assertDeepEqual(
+  calculateOzonBackendPricing(125, 12),
+  {
+    isValid: true,
+    frontPriceRMB: 125,
+    frontPriceRUB: 1500,
+    ozonBackendPriceRMB: 312.5,
+    ozonBackendPriceRUB: 3750,
+    ozonOriginalPriceRMB: 520.83,
+    ozonOriginalPriceRUB: 6250,
+  },
+  "Ozon backend pricing"
+);
+assertEqual(calculateOzonBackendPricing(0, 12).isValid, false, "Ozon pricing invalid without price");
+assertEqual(calculateOzonBackendPricing(125, 0).isValid, false, "Ozon pricing invalid without rate");
 
 const alternativeShipping = parseAlternativeShippingRows([
   ["Лого", "Метод", "Рейтинг Ozon", "Сроки доставки", "ПВЗ", "Курьер", "Батарейки"],

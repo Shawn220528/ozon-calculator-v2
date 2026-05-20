@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef, type Dispatch, type ReactNode, type SetStateAction } from "react";
-import { Package, Truck, Megaphone, Tag, AlertTriangle, RotateCcw, Battery, Droplets, CheckCircle2, DollarSign, Lock, Unlock, ChevronDown } from "lucide-react";
+import { Package, Truck, Megaphone, Tag, AlertTriangle, RotateCcw, Battery, Droplets, CheckCircle2, DollarSign, Lock, Unlock, ChevronDown, Copy } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -20,6 +20,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { useDataHub } from "@/lib/data-hub-context";
 import { CalculationInput, ShippingChannel } from "@/lib/types";
+import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
 
 /**
  * 🔹 全局汇率转换准则 (Exchange Rate Conversion Rules)
@@ -82,6 +83,7 @@ interface InputPanelProps {
     unfixableChannelCount: number;
     cannotFixByPrice: boolean;
   } | null;
+  onCopyOzonPrice?: (label: string, value: string) => void;
 }
 
 function Section({
@@ -125,7 +127,7 @@ function Section({
   );
 }
 
-export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = 'RMB', currentProfitMargin, onReversePriceFromMargin, marginError, onReset, adRiskControl, shippingData = [], selectedBillingInfo, lockedMargin = null, onToggleMarginLock, suggestedPriceInfo }: InputPanelProps) {
+export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = 'RMB', currentProfitMargin, onReversePriceFromMargin, marginError, onReset, adRiskControl, shippingData = [], selectedBillingInfo, lockedMargin = null, onToggleMarginLock, suggestedPriceInfo, onCopyOzonPrice }: InputPanelProps) {
   const { getCategories } = useDataHub();
   const categories = useMemo(() => getCategories(), [getCategories]);
   
@@ -193,6 +195,11 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     product: true,
     pricing: true,
   });
+
+  const ozonPricing = useMemo(
+    () => calculateOzonBackendPricing(input.targetPriceRMB, input.exchangeRate),
+    [input.targetPriceRMB, input.exchangeRate]
+  );
 
   return (
     <div className="space-y-2 pr-1">
@@ -776,6 +783,44 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               )}
             </div>
           </div>
+          {ozonPricing.isValid && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <div className="text-xs font-bold text-slate-700">Ozon 后台填写价</div>
+                <div className="text-[10px] text-slate-500">前台=后台4折，后台=折前6折</div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    label: "后台定价",
+                    valueRMB: ozonPricing.ozonBackendPriceRMB,
+                    valueRUB: ozonPricing.ozonBackendPriceRUB,
+                  },
+                  {
+                    label: "折扣前价格",
+                    valueRMB: ozonPricing.ozonOriginalPriceRMB,
+                    valueRUB: ozonPricing.ozonOriginalPriceRUB,
+                  },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-md border border-white bg-white px-2 py-1.5 shadow-sm">
+                    <div className="mb-1 flex items-center justify-between gap-1">
+                      <span className="text-[10px] font-medium text-slate-500">{item.label}</span>
+                      <button
+                        type="button"
+                        onClick={() => onCopyOzonPrice?.(item.label, item.valueRMB.toFixed(2))}
+                        className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        title={`复制${item.label}`}
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="text-sm font-black tabular-nums text-slate-800">¥{item.valueRMB.toFixed(2)}</div>
+                    <div className="text-[10px] text-slate-500">≈ ₽{item.valueRUB.toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {/* 🔹 竞品价格对比 - 简化版 */}
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">竞品售价</Label>

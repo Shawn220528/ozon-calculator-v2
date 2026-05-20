@@ -44,6 +44,7 @@ import {
   downloadCommissionTemplate,
   downloadShippingTemplate,
 } from "@/lib/template-export";
+import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
 
 // 默认输入：售价为 RMB（1500 RUB ÷ 12 = 125 RMB）
 const DEFAULT_INPUT: CalculationInput = {
@@ -908,6 +909,7 @@ export default function Home() {
   const handleExportSingleReport = useCallback(() => {
     const activeTax = result.taxes?.enabled ? result.taxes : null;
     const firstSuggestion = result.suggestions[0] || (result.netProfit < 0 ? "提高售价或降低成本" : "继续观察物流与广告风险");
+    const ozonPricing = calculateOzonBackendPricing(input.targetPriceRMB, input.exchangeRate);
     downloadCsv(
       `ozon_single_report_${new Date().toISOString().slice(0, 10)}.csv`,
       ["模块", "项目", "值", "说明"],
@@ -918,6 +920,12 @@ export default function Home() {
         ["输入", "重量", input.weight, "g"],
         ["定价", "售价RMB", input.targetPriceRMB, ""],
         ["定价", "售价RUB", cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0), ""],
+        ...(ozonPricing.isValid ? [
+          ["定价", "Ozon后台定价RMB", ozonPricing.ozonBackendPriceRMB.toFixed(2), "前台售价 ÷ 40%"],
+          ["定价", "Ozon折扣前价格RMB", ozonPricing.ozonOriginalPriceRMB.toFixed(2), "后台定价 ÷ 60%"],
+          ["定价", "Ozon后台定价RUB", ozonPricing.ozonBackendPriceRUB, "参考平台币种"],
+          ["定价", "Ozon折扣前价格RUB", ozonPricing.ozonOriginalPriceRUB, "参考平台币种"],
+        ] : []),
         ["结果", "净利润", result.netProfit.toFixed(2), "默认税前口径"],
         ["结果", "ROI", result.roi.toFixed(1), "%"],
         ["结果", "利润率", result.profitMargin.toFixed(1), "%"],
@@ -936,6 +944,23 @@ export default function Home() {
       ]
     );
   }, [input, result, selectedChannel, stressTest]);
+
+  const handleCopyOzonPrice = useCallback(async (label: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setUploadToast({ message: `✅ 已复制${label}: ${value}`, type: "success" });
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setUploadToast({ message: `✅ 已复制${label}: ${value}`, type: "success" });
+    }
+  }, []);
   
   // 🔹 映射确认处理
   const handleMappingConfirm = useCallback(async (mappings: FieldMapping[]) => {
@@ -1782,6 +1807,7 @@ export default function Home() {
                 lockedMargin={lockedMargin}
                 onToggleMarginLock={handleToggleMarginLock}
                 suggestedPriceInfo={priceSuggestion}
+                onCopyOzonPrice={handleCopyOzonPrice}
               />
             </div>
           </div>
@@ -1803,6 +1829,7 @@ export default function Home() {
               multiItemProfit={multiItemProfit}
               sixTierPricing={sixTierPricing}
               commission={commission}
+              onCopyOzonPrice={handleCopyOzonPrice}
             />
           </div>
 
