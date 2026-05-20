@@ -212,6 +212,29 @@ html {
   animation: warning-pulse 1.2s ease-in-out infinite;
 }
 
+@keyframes top-alert-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.top-alert-marquee-track {
+  animation: top-alert-marquee 28s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .top-alert-marquee {
+    overflow-x: auto;
+  }
+
+  .top-alert-marquee-track {
+    animation: none;
+  }
+}
+
 /* 快速闪烁 - 超紧急 */
 @keyframes critical-flash {
   0%, 100% {

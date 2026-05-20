@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef, type ReactNode } from "react";
 import * as XLSX from "xlsx";
 import { InputPanel } from "@/components/input-panel";
 import { Dashboard } from "@/components/dashboard";
 import { LogisticsCard } from "@/components/logistics-card";
 import { useDataHub } from "@/lib/data-hub-context";
-import { RotateCcw, Truck, Upload, FileText, Settings, AlertCircle, RefreshCw, Clock, Star, WalletCards } from "lucide-react";
+import { RotateCcw, Truck, Upload, FileText, Settings, AlertCircle, RefreshCw, Clock, Star, WalletCards, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -170,6 +170,76 @@ async function readTabularFileAsCsv(file: File, type?: "commission" | "shipping"
   return { csvContent: await file.text() };
 }
 
+type TopAlertSeverity = "danger" | "warning" | "info" | "success";
+
+interface TopAlertItem {
+  id: string;
+  severity: TopAlertSeverity;
+  label: ReactNode;
+  detail?: ReactNode;
+  action?: ReactNode;
+}
+
+const topAlertClassBySeverity: Record<TopAlertSeverity, string> = {
+  danger: "border-red-300 bg-red-50 text-red-800",
+  warning: "border-amber-300 bg-amber-50 text-amber-800",
+  info: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  success: "border-emerald-200 bg-emerald-50 text-emerald-700",
+};
+
+function TopAlertBadge({ item, onDismiss, duplicate = false }: { item: TopAlertItem; onDismiss: (id: string) => void; duplicate?: boolean }) {
+  return (
+    <div className={`inline-flex h-7 max-w-[520px] flex-shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-sm ${topAlertClassBySeverity[item.severity]}`}>
+      <span className="min-w-0 truncate whitespace-nowrap">{item.label}</span>
+      {!duplicate && item.detail}
+      {!duplicate && item.action}
+      <button
+        type="button"
+        aria-label="清除此提示"
+        tabIndex={duplicate ? -1 : 0}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (duplicate) return;
+          onDismiss(item.id);
+        }}
+        className="ml-0.5 inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded text-current opacity-55 hover:bg-white/60 hover:opacity-100"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+function TopAlertBar({ items, onDismiss }: { items: TopAlertItem[]; onDismiss: (id: string) => void }) {
+  if (items.length === 0) return null;
+
+  const totalTextLength = items.reduce((sum, item) => {
+    const label = typeof item.label === "string" || typeof item.label === "number" ? String(item.label) : "";
+    return sum + label.length;
+  }, 0);
+  const useMarquee = items.length > 4 || totalTextLength > 72;
+  const renderedItems = items.map((item) => <TopAlertBadge key={item.id} item={item} onDismiss={onDismiss} />);
+
+  if (!useMarquee) {
+    return (
+      <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-2 overflow-hidden">
+        {renderedItems}
+      </div>
+    );
+  }
+
+  return (
+    <div className="top-alert-marquee group min-w-0 flex-1 overflow-hidden rounded-md border border-slate-200 bg-white/70 px-1.5 py-1 focus-within:[--alert-marquee-state:paused] hover:[--alert-marquee-state:paused]">
+      <div className="top-alert-marquee-track flex w-max items-center gap-2 [animation-play-state:var(--alert-marquee-state,running)]">
+        {renderedItems}
+        <div aria-hidden="true" className="flex items-center gap-2 pl-2">
+          {items.map((item) => <TopAlertBadge key={`${item.id}-copy`} item={item} onDismiss={onDismiss} duplicate />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function getRiskLevel(result: CalculationResult | null, availableCount: number, hasVolumetric: boolean): "低" | "中" | "高" {
   if (!result || availableCount === 0 || result.netProfit < 0 || result.adRiskControl?.isOverBudget) return "高";
   if (hasVolumetric || result.profitMargin < 10 || result.warnings.length > 0) return "中";
@@ -269,6 +339,7 @@ export default function Home() {
   
   // 🔹 上传成功提示状态
   const [uploadToast, setUploadToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [dismissedAlertIds, setDismissedAlertIds] = useState<Set<string>>(() => new Set());
   
   // 🔹 上传提示自动消失
   useEffect(() => {
@@ -1106,6 +1177,223 @@ export default function Home() {
     return channelBillingInfo.get(selectedChannel.id) || null;
   }, [selectedChannel, channelBillingInfo]);
 
+  const dimensionOrWeightExceeded = useMemo(() => {
+    const sumDim = input.length + input.width + input.height;
+    const maxSide = Math.max(input.length, input.width, input.height);
+    const dimEx = shippingChannels.available.find(ch => (ch.maxLength && maxSide > ch.maxLength) || (ch.maxSumDimension && sumDim > ch.maxSumDimension));
+    const weightEx = shippingChannels.available.find(ch => ch.maxWeight && input.weight > ch.maxWeight);
+    return Boolean(dimEx || weightEx);
+  }, [input.height, input.length, input.weight, input.width, shippingChannels.available]);
+
+  const priceLimitAlertInfo = useMemo(() => {
+    if (shippingChannels.available.length > 0) return null;
+
+    const valueBlockedChannel = shippingChannels.unavailable.find(ch => ch.interceptionReasons?.some((reason) => reason.dimension === "货值"));
+    const preferredCurrency = input.valueLimitCurrency;
+    const preferredMin = preferredCurrency === "RMB" ? valueBlockedChannel?.minValue : valueBlockedChannel?.minValueRUB;
+    const preferredMax = preferredCurrency === "RMB" ? valueBlockedChannel?.maxValue : valueBlockedChannel?.maxValueRUB;
+    const fallbackCurrency = preferredCurrency === "RMB" ? "RUB" : "RMB";
+    const fallbackMin = fallbackCurrency === "RMB" ? valueBlockedChannel?.minValue : valueBlockedChannel?.minValueRUB;
+    const fallbackMax = fallbackCurrency === "RMB" ? valueBlockedChannel?.maxValue : valueBlockedChannel?.maxValueRUB;
+    const hasPreferredLimit = preferredMin !== undefined || preferredMax !== undefined;
+    const useRmbLimit = hasPreferredLimit ? preferredCurrency === "RMB" : fallbackCurrency === "RMB";
+    const maxValue = hasPreferredLimit ? preferredMax : fallbackMax;
+    const minValue = hasPreferredLimit ? preferredMin : fallbackMin;
+    const currentValue = useRmbLimit ? input.targetPriceRMB : cnyToRub(input.targetPriceRMB, input.exchangeRate);
+    const unit = useRmbLimit ? "¥" : "₽";
+    const isPriceTooHigh = maxValue !== undefined && currentValue > maxValue;
+    const isPriceTooLow = minValue !== undefined && currentValue < minValue;
+
+    if (!valueBlockedChannel || (maxValue === undefined && minValue === undefined) || (!isPriceTooHigh && !isPriceTooLow)) {
+      return null;
+    }
+
+    return {
+      currentValue,
+      isPriceTooHigh,
+      isPriceTooLow,
+      maxValue,
+      minValue,
+      unit,
+      useRmbLimit,
+    };
+  }, [input.exchangeRate, input.targetPriceRMB, input.valueLimitCurrency, shippingChannels.available.length, shippingChannels.unavailable]);
+
+  const rawTopAlerts = useMemo<TopAlertItem[]>(() => {
+    const alerts: TopAlertItem[] = [];
+
+    if (priceSuggestion && priceSuggestion.suggestedPriceRMB > 0) {
+      alerts.push({
+        id: `price-suggestion-${Math.ceil(priceSuggestion.suggestedPriceRMB)}-${priceSuggestion.channelName}`,
+        severity: "warning",
+        label: (
+          <>
+            建议售价 <strong>¥{Math.ceil(priceSuggestion.suggestedPriceRMB)}</strong>
+            <span className="ml-1">(≈{Math.round(priceSuggestion.suggestedPriceRUB).toLocaleString()}₽) 可匹配「{priceSuggestion.channelName}」</span>
+            {priceSuggestion.unfixableChannelCount > 0 && (
+              <span className="ml-1 text-[10px] opacity-80">(另有{priceSuggestion.unfixableChannelCount}个渠道调价无法修复)</span>
+            )}
+          </>
+        ),
+        action: (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setInput(prev => ({ ...prev, targetPriceRMB: Math.ceil(priceSuggestion.suggestedPriceRMB) }));
+            }}
+            className="ml-1 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-amber-600"
+          >
+            填入
+          </button>
+        ),
+      });
+    }
+
+    if (priceSuggestion?.cannotFixByPrice) {
+      alerts.push({
+        id: "price-unfixable",
+        severity: "danger",
+        label: "所有渠道因尺寸/重量/属性拦截，调价无法解决",
+      });
+    }
+
+    if (result.netProfit < 0) {
+      alerts.push({
+        id: "negative-profit",
+        severity: "danger",
+        label: `亏损: ¥${Math.abs(result.netProfit).toFixed(2)}`,
+      });
+    }
+
+    if (dimensionOrWeightExceeded) {
+      alerts.push({ id: "dimension-weight-exceeded", severity: "danger", label: "超限" });
+    }
+
+    if (priceLimitAlertInfo) {
+      const title = priceLimitAlertInfo.isPriceTooHigh && !priceLimitAlertInfo.isPriceTooLow
+        ? "价格过高"
+        : priceLimitAlertInfo.isPriceTooLow && !priceLimitAlertInfo.isPriceTooHigh
+          ? "价格过低"
+          : "价格不符";
+      const formatLimit = (value: number) => priceLimitAlertInfo.useRmbLimit ? value.toFixed(2) : Math.round(value).toLocaleString();
+
+      alerts.push({
+        id: `price-limit-${title}-${priceLimitAlertInfo.unit}`,
+        severity: "danger",
+        label: title,
+        detail: (
+          <details className="group relative ml-1 inline">
+            <summary className="inline cursor-help list-none text-xs opacity-75 hover:opacity-100">ⓘ</summary>
+            <div className="hidden group-open:block fixed left-1/2 top-[92px] z-[99999] mt-2 min-w-[220px] -translate-x-1/2 whitespace-nowrap rounded-lg border-2 border-red-200 bg-white p-3 text-xs text-slate-700 shadow-xl">
+              <div className="mb-1 font-bold text-red-600">渠道价格限制说明</div>
+              <div className="text-[11px] text-slate-600">该物流渠道对商品售价有限制，您的售价超出了允许范围。</div>
+              <div className="mt-2 space-y-1 rounded bg-red-50 p-2">
+                <div className="flex justify-between gap-4 text-[11px]">
+                  <span className="text-slate-500">您的售价:</span>
+                  <span className="font-semibold text-red-600">{priceLimitAlertInfo.unit}{formatLimit(priceLimitAlertInfo.currentValue)}</span>
+                </div>
+                <div className="flex justify-between gap-4 text-[11px]">
+                  <span className="text-slate-500">渠道要求:</span>
+                  <span className="font-semibold">
+                    {priceLimitAlertInfo.minValue !== undefined ? `${priceLimitAlertInfo.unit}${formatLimit(priceLimitAlertInfo.minValue)}` : "无下限"}
+                    {priceLimitAlertInfo.minValue !== undefined && priceLimitAlertInfo.maxValue !== undefined ? " ~ " : ""}
+                    {priceLimitAlertInfo.maxValue !== undefined ? `${priceLimitAlertInfo.unit}${formatLimit(priceLimitAlertInfo.maxValue)}` : "无上限"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </details>
+        ),
+      });
+    }
+
+    if (selectedBillingInfo?.isVolumetric && selectedBillingInfo.billingWeight > selectedBillingInfo.actualWeight) {
+      alerts.push({
+        id: "volumetric-billing",
+        severity: "warning",
+        label: `计抛: ${selectedBillingInfo.billingWeight.toFixed(0)}g`,
+      });
+    }
+
+    if (result.adRiskControl?.isOverBudget) {
+      alerts.push({ id: "ad-over-budget", severity: "warning", label: "广告超支" });
+    }
+
+    if (input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined && result.profitMargin < input.profitWarningThreshold) {
+      alerts.push({
+        id: "profit-threshold",
+        severity: "danger",
+        label: `利润 ${result.profitMargin.toFixed(1)}% < 阈值 ${input.profitWarningThreshold}%`,
+      });
+    }
+
+    Array.from(new Set(result.suggestions.slice(0, 2))).forEach((suggestion, index) => {
+      alerts.push({ id: `suggestion-${index}-${suggestion}`, severity: "info", label: suggestion });
+    });
+
+    const weightSaved = (selectedBillingInfo?.volumetricWeight || 0) - input.weight;
+    if (weightSaved > 50) {
+      alerts.push({
+        id: `weight-save-${Math.round(weightSaved)}`,
+        severity: "success",
+        label: `减重${weightSaved.toFixed(0)}g进下一阶梯`,
+      });
+    }
+
+    if (alerts.length === 0 && !result.warnings.length && result.netProfit >= 0 && !selectedBillingInfo?.isVolumetric) {
+      alerts.push({ id: "all-good", severity: "success", label: "参数正常" });
+    }
+
+    return alerts;
+  }, [
+    dimensionOrWeightExceeded,
+    input.profitWarningThreshold,
+    input.weight,
+    priceLimitAlertInfo,
+    priceSuggestion,
+    result.adRiskControl?.isOverBudget,
+    result.netProfit,
+    result.profitMargin,
+    result.suggestions,
+    result.warnings.length,
+    selectedBillingInfo,
+  ]);
+
+  const activeTopAlertIdKey = useMemo(
+    () => rawTopAlerts.map((item) => item.id).join("|"),
+    [rawTopAlerts]
+  );
+
+  useEffect(() => {
+    const activeIds = new Set(activeTopAlertIdKey ? activeTopAlertIdKey.split("|") : []);
+    setDismissedAlertIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (activeIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [activeTopAlertIdKey]);
+
+  const topAlerts = useMemo(
+    () => rawTopAlerts.filter((item) => !dismissedAlertIds.has(item.id)),
+    [dismissedAlertIds, rawTopAlerts]
+  );
+
+  const handleDismissTopAlert = useCallback((id: string) => {
+    setDismissedAlertIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
   // 🔹 推荐物流排序：按费用/时效/评分排序
   const sortedAvailableChannels = useMemo(() => {
     const channels = [...shippingChannels.available];
@@ -1389,6 +1677,8 @@ export default function Home() {
           <span>货值覆盖 {dataStatus.valueCoverage}%</span>
         </div>
 
+        <TopAlertBar items={topAlerts} onDismiss={handleDismissTopAlert} />
+
         {showDiagnostic && !(shippingChannels.available.length === 0 && shippingData.length > 0) && (
           <>
             <div className="fixed inset-0 z-[70] bg-black/20" onClick={() => setShowDiagnostic(false)} />
@@ -1606,173 +1896,6 @@ export default function Home() {
           </div>
         )}
         
-        {/* 💡 智能售价建议横幅 - 无渠道+未填售价时显示 */}
-        {priceSuggestion && priceSuggestion.suggestedPriceRMB > 0 && (
-          <div className="inline-flex h-7 flex-shrink-0 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 text-xs font-bold text-amber-800 shadow-sm">
-            <span>建议售价 <strong>¥{Math.ceil(priceSuggestion.suggestedPriceRMB)}</strong> 
-              (≈{Math.round(priceSuggestion.suggestedPriceRUB).toLocaleString()}₽) 
-              可匹配「{priceSuggestion.channelName}」</span>
-            <button 
-              onClick={() => setInput(prev => ({ ...prev, targetPriceRMB: Math.ceil(priceSuggestion.suggestedPriceRMB) }))}
-              className="ml-1 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-amber-600"
-            >
-              填入
-            </button>
-            {priceSuggestion.unfixableChannelCount > 0 && (
-              <span className="text-[10px] text-amber-600 ml-1">
-                (另有{priceSuggestion.unfixableChannelCount}个渠道调价无法修复)
-              </span>
-            )}
-          </div>
-        )}
-        
-        {/* 💡 调价无法解决横幅 */}
-        {priceSuggestion && priceSuggestion.cannotFixByPrice && (
-          <div className="inline-flex h-7 flex-shrink-0 items-center gap-2 rounded-md border border-red-300 bg-red-50 px-2.5 text-xs font-bold text-red-800 shadow-sm">
-            <span>所有渠道因尺寸/重量/属性拦截，调价无法解决</span>
-          </div>
-        )}
-        
-        {/* 🔴 阻断错误 - 亏损（唯一）- 强烈红色闪烁 */}
-        {result.netProfit < 0 && (
-          <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-red-700 bg-red-500 px-2.5 text-xs font-bold text-white shadow-sm">
-            <span>亏损: ¥{Math.abs(result.netProfit).toFixed(2)}</span>
-          </span>
-        )}
-        
-        {/* 尺寸/重量超限（唯一）- 红色边框脉冲 */}
-        {(() => {
-          const sumDim = input.length + input.width + input.height;
-          const maxSide = Math.max(input.length, input.width, input.height);
-          const dimEx = shippingChannels.available.find(ch => (ch.maxLength && maxSide > ch.maxLength) || (ch.maxSumDimension && sumDim > ch.maxSumDimension));
-          const weightEx = shippingChannels.available.find(ch => ch.maxWeight && input.weight > ch.maxWeight);
-          if (dimEx || weightEx) {
-            return (
-              <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-red-300 bg-red-50 px-2.5 text-xs font-bold text-red-700">
-                <span>超限</span>
-              </span>
-            );
-          }
-          return null;
-        })()}
-        
-        {/* 🔹 渠道价格限制 - 仅当没有可用渠道时才显示警告 */}
-        {(() => {
-          // 只有当没有任何可用渠道时，才显示价格限制警告
-          const hasAvailableChannels = shippingChannels.available.length > 0;
-          
-          // 如果有可用渠道，不显示价格拦截警告
-          if (hasAvailableChannels) return null;
-          
-          // 提取价格限制的渠道，获取其数值范围
-          const valueBlockedChannel = shippingChannels.unavailable.find(ch => ch.interceptionReasons?.some((reason) => reason.dimension === "货值"));
-          const preferredCurrency = input.valueLimitCurrency;
-          const preferredMin = preferredCurrency === "RMB" ? valueBlockedChannel?.minValue : valueBlockedChannel?.minValueRUB;
-          const preferredMax = preferredCurrency === "RMB" ? valueBlockedChannel?.maxValue : valueBlockedChannel?.maxValueRUB;
-          const fallbackCurrency = preferredCurrency === "RMB" ? "RUB" : "RMB";
-          const fallbackMin = fallbackCurrency === "RMB" ? valueBlockedChannel?.minValue : valueBlockedChannel?.minValueRUB;
-          const fallbackMax = fallbackCurrency === "RMB" ? valueBlockedChannel?.maxValue : valueBlockedChannel?.maxValueRUB;
-          const useRmbLimit = preferredMin !== undefined || preferredMax !== undefined
-            ? preferredCurrency === "RMB"
-            : fallbackCurrency === "RMB";
-          const maxValue = preferredMin !== undefined || preferredMax !== undefined ? preferredMax : fallbackMax;
-          const minValue = preferredMin !== undefined || preferredMax !== undefined ? preferredMin : fallbackMin;
-          const currentValue = useRmbLimit ? input.targetPriceRMB : cnyToRub(input.targetPriceRMB, input.exchangeRate);
-          const unit = useRmbLimit ? "¥" : "₽";
-          
-          // 判断是价格过高还是过低
-          const isPriceTooHigh = maxValue !== undefined && currentValue > maxValue;
-          const isPriceTooLow = minValue !== undefined && currentValue < minValue;
-          
-          return (valueBlockedChannel && (maxValue !== undefined || minValue !== undefined) && (isPriceTooHigh || isPriceTooLow)) ? (
-            <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-red-600 bg-red-500 px-2.5 text-xs font-bold text-white shadow-sm">
-              <span>{isPriceTooHigh && !isPriceTooLow ? '价格过高' : isPriceTooLow && !isPriceTooHigh ? '价格过低' : '价格不符'}</span>
-              <details className="inline ml-1 group relative">
-                <summary className="cursor-help list-none inline text-xs opacity-75 hover:opacity-100">
-                  ⓘ
-                </summary>
-                <div className="hidden group-open:block fixed left-1/2 -translate-x-1/2 top-full z-[99999] mt-2 p-3 bg-white text-slate-700 rounded-lg shadow-xl border-2 border-red-200 text-xs whitespace-nowrap min-w-[200px]">
-                  <div className="font-bold text-red-600 mb-1">📦 渠道价格限制说明</div>
-                  <div className="text-slate-600 text-[11px]">
-                    该物流渠道对商品售价有限制，您的售价超出了允许范围。
-                  </div>
-                  <div className="mt-2 bg-red-50 p-2 rounded space-y-1">
-                    <div className="flex justify-between text-[11px]">
-                      <span className="text-slate-500">您的售价:</span>
-                      <span className="font-semibold text-red-600">
-                        {unit}{useRmbLimit ? currentValue.toFixed(2) : Math.round(currentValue).toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-[11px]">
-                      <span className="text-slate-500">渠道要求:</span>
-                      <span className="font-semibold">
-                        {minValue !== undefined ? `${unit}${useRmbLimit ? minValue.toFixed(2) : Math.round(minValue).toLocaleString()}` : '无下限'}
-                        {minValue !== undefined && maxValue !== undefined ? ' ~ ' : ''}
-                        {maxValue !== undefined ? `${unit}${useRmbLimit ? maxValue.toFixed(2) : Math.round(maxValue).toLocaleString()}` : '无上限'}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="mt-2 text-slate-500 text-[10px] border-t pt-2">
-                    💡 <span className="font-medium">解决方法：</span>
-                    <div>• 调整售价至允许范围内</div>
-                    <div>• 或更换其他物流渠道</div>
-                  </div>
-                </div>
-              </details>
-            </span>
-          ) : null;
-        })()}
-        
-        {/* ⚠️ 计抛预警 - 强烈橙色脉冲（唯一） */}
-        {selectedBillingInfo?.isVolumetric && selectedBillingInfo.billingWeight > selectedBillingInfo.actualWeight && (
-          <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-amber-600 bg-amber-500 px-2.5 text-xs font-bold text-white shadow-sm">
-            <span>计抛: {selectedBillingInfo.billingWeight.toFixed(0)}g</span>
-          </span>
-        )}
-        
-        {/* 广告超支 - 橙色警告 */}
-        {result.adRiskControl?.isOverBudget && (
-          <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 text-xs font-bold text-amber-800 shadow-sm">
-            <span>广告超支</span>
-          </span>
-        )}
-        
-        {/* 🔹 利润预警 - 低于阈值时显示 */}
-        {input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined && result.profitMargin < input.profitWarningThreshold && (
-          <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-red-300 bg-red-50 px-2.5 text-xs font-bold text-red-800 shadow-sm">
-            <span>利润 {result.profitMargin.toFixed(1)}% &lt; 阈值 {input.profitWarningThreshold}%</span>
-          </span>
-        )}
-        
-        {/* 💡 建议 Tips - 紫色提示（唯一） */}
-        {(() => {
-          const uniqueSuggestions = Array.from(new Set(result.suggestions.slice(0, 2)));
-          return uniqueSuggestions.map((s, i) => (
-            <span key={`tip-${i}`} className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2.5 text-xs font-medium text-indigo-700">
-              <span className="whitespace-nowrap">{s}</span>
-            </span>
-          ));
-        })()}
-        
-        {/* 减重建议 - 绿色（唯一） */}
-        {(() => {
-          const weightSaved = (selectedBillingInfo?.volumetricWeight || 0) - input.weight;
-          if (weightSaved > 50) {
-            return (
-              <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-bold text-emerald-700">
-                <span>减重{weightSaved.toFixed(0)}g进下一阶梯</span>
-              </span>
-            );
-          }
-          return null;
-        })()}
-        
-        {/* ✅ 参数正常提示（唯一） - 绿色醒目 */}
-        {!result.warnings.length && result.netProfit >= 0 && !selectedBillingInfo?.isVolumetric && (
-          <span className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-bold text-emerald-700">
-            <span>参数正常</span>
-          </span>
-        )}
       </div>
       
       {/* 🔹 主内容区 - 四区紧凑经营工作台 */}
