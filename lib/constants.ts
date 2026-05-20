@@ -21,7 +21,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
   {
     key: 'name',
     label: '配送方式',
-    aliases: ['配送方式', '物流名称', 'method name', 'name', '物流方式', '配送方式名称'],
+    aliases: ['配送方式', '物流名称', 'method name', 'delivery method', 'name', '物流方式', '配送方式名称'],
     type: 'text',
     required: true,
     description: '物流渠道名称'
@@ -37,7 +37,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
   {
     key: 'serviceTier',
     label: '评分组',
-    aliases: ['评分组', '服务组', 'tier', 'service tier', 'service group', 'группа'],
+    aliases: ['评分组', 'scoring group', '服务组', 'tier', 'service tier', 'service group', 'группа'],
     type: 'text',
     required: false
   },
@@ -59,7 +59,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
   {
     key: 'deliveryTime',
     label: '时效',
-    aliases: ['时效', '时效(天)', 'delivery time', 'срок', 'Delivery time', '配送时间'],
+    aliases: ['时效', '时效(天)', 'time-limits', 'delivery time', 'срок', 'Delivery time', '配送时间'],
     type: 'text',
     required: false,
     defaultValue: '5-14'
@@ -67,7 +67,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
   {
     key: 'rate',
     label: '费率',
-    aliases: ['费率', '费率(固定+变动)', 'rate', 'ставка', '价格'],
+    aliases: ['费率', '费率(固定+变动)', 'rates (pudo / courier)', 'rates', 'rate', 'ставка', '价格'],
     type: 'text',
     required: true,
     description: '格式: ¥固定费 + ¥每克变动费/1g'
@@ -75,7 +75,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
   {
     key: 'battery',
     label: '电池',
-    aliases: ['电池', '允许电池', 'battery', 'батарея', 'Has battery', '带电池'],
+    aliases: ['电池', '允许电池', 'battery', 'batteries', 'батарея', 'Has battery', '带电池'],
     type: 'boolean',
     required: false,
     defaultValue: false
@@ -83,7 +83,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
   {
     key: 'liquid',
     label: '液体',
-    aliases: ['液体', '允许液体', 'liquid', 'жидкость', 'Has liquid', '带液体'],
+    aliases: ['液体', '允许液体', 'liquid', 'liquids', 'жидкость', 'Has liquid', '带液体'],
     type: 'boolean',
     required: false,
     defaultValue: false
@@ -94,7 +94,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     aliases: [
       '尺寸限制', '尺寸限制，最大（厘米）', 'размер', 
       'dimension', 'dimensions', 'size limit',
-      '尺寸', '长度限制', 'Max length, cm', 'Length'
+      'measurements, max cm', '尺寸', '长度限制', 'Max length, cm', 'Length'
     ],
     type: 'dimension-nlp',
     required: false,
@@ -105,7 +105,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     label: '最小重量',
     aliases: [
       '最小重量', '重量限制 / 最小（克）', 'min weight', 'minimum', 'мин вес',
-      'Min weight, g', '最小重量 (g)', '最低重量'
+      'shipment weight limits / min g', 'Min weight, g', '最小重量 (g)', '最低重量'
     ],
     type: 'number',
     required: false,
@@ -116,7 +116,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     label: '最大重量',
     aliases: [
       '最大重量', '重量限制 / 最大（克）', 'max weight', 'maximum', 'макс вес',
-      'Max weight, g', '最大重量 (g)', '最高重量'
+      'shipment weight limits / max g', 'Max weight, g', '最大重量 (g)', '最高重量'
     ],
     type: 'number',
     required: false,
@@ -127,6 +127,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     label: '货值限制(卢布)',
     aliases: [
       '货值限制/最低-最高（卢布）', '货值限制（卢布）', '货值限制卢布', '卢布', 'rub',
+      'shipment cost limit / min-max rub',
       'max value rub', 'max price rub', 'Макс. сумма заказа, ₽',
       '最大订单金额', 'Max price', '最大价格', '货值限制卢布'
     ],
@@ -139,6 +140,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     label: '货值限制(人民币)',
     aliases: [
       '货值限制/最低-最高（人民币）', '货值限制（人民币）', '货值限制-人民币', '货值限制人民币', '人民币', 'rmb', 'cny',
+      'shipment cost limit / min-max cny',
       'max value', 'max amount', 'макс сумма'
     ],
     type: 'price-range',
@@ -147,7 +149,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
   {
     key: 'billingType',
     label: '计费类型',
-    aliases: ['计费类型', '计费方式', 'billing type', 'type', 'тип оплаты'],
+    aliases: ['计费类型', '计费方式', 'tarification type', 'billing type', 'type', 'тип оплаты'],
     type: 'text',
     required: false,
     defaultValue: '实际重量'
@@ -157,7 +159,7 @@ export const LOGISTICS_FIELDS: FieldSchema[] = [
     label: '体积重除数',
     aliases: [
       '体积重量计算方式', '体积重除数', '除数', 'divisor', 'коэффициент',
-      'Volumetric coefficient', '体积系数', '体积重量'
+      'volume weight calculation', 'Volumetric coefficient', '体积系数', '体积重量'
     ],
     type: 'text',
     required: false,

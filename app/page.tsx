@@ -45,6 +45,7 @@ import {
   downloadShippingTemplate,
 } from "@/lib/template-export";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
+import { selectShippingSheetName } from "@/lib/shipping-workbook";
 
 // 默认输入：售价为 RMB（1500 RUB ÷ 12 = 125 RMB）
 const DEFAULT_INPUT: CalculationInput = {
@@ -149,15 +150,24 @@ function getFinanceTextClass(value: number | undefined | null): string {
   return value >= 0 ? "text-red-700" : "text-emerald-700";
 }
 
-async function readTabularFileAsCsv(file: File): Promise<string> {
+async function readTabularFileAsCsv(file: File, type?: "commission" | "shipping" | "batch"): Promise<{ csvContent: string; sheetName?: string }> {
   const ext = file.name.split(".").pop()?.toLowerCase();
   if (ext === "xlsx" || ext === "xls") {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
-    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    return XLSX.utils.sheet_to_csv(firstSheet);
+    const sheetName = type === "shipping"
+      ? selectShippingSheetName(workbook.SheetNames)
+      : workbook.SheetNames[0];
+    if (!sheetName) {
+      throw new Error("未找到可解析的工作表");
+    }
+    const worksheet = workbook.Sheets[sheetName];
+    return {
+      csvContent: XLSX.utils.sheet_to_csv(worksheet),
+      sheetName,
+    };
   }
-  return file.text();
+  return { csvContent: await file.text() };
 }
 
 function getRiskLevel(result: CalculationResult | null, availableCount: number, hasVolumetric: boolean): "低" | "中" | "高" {
@@ -714,8 +724,8 @@ export default function Home() {
     
     try {
       // 读取文件并解析
-      const content = await file.text();
-      const parsed = smartParseCSV(content, "commission");
+      const { csvContent } = await readTabularFileAsCsv(file, "commission");
+      const parsed = smartParseCSV(csvContent, "commission");
       setParsedCsvData(parsed);
       setMappingDataType("commission");
       setPendingMappingFile(file);
@@ -741,12 +751,15 @@ export default function Home() {
     
     try {
       // 读取文件并解析
-      const content = await file.text();
-      const parsed = smartParseCSV(content, "shipping");
+      const { csvContent, sheetName } = await readTabularFileAsCsv(file, "shipping");
+      const parsed = smartParseCSV(csvContent, "shipping");
       setParsedCsvData(parsed);
       setMappingDataType("shipping");
       setPendingMappingFile(file);
       setMappingDialogOpen(true);
+      if (sheetName) {
+        setUploadToast({ message: `✅ 已读取物流工作表：${sheetName}`, type: "success" });
+      }
     } catch (err) {
       // 回退到直接加载
       try {
@@ -768,8 +781,8 @@ export default function Home() {
     setBatchResults([]);
 
     try {
-      const content = await readTabularFileAsCsv(file);
-      const parsed = parseBatchCsvInput(content);
+      const { csvContent } = await readTabularFileAsCsv(file, "batch");
+      const parsed = parseBatchCsvInput(csvContent);
       const parseErrorText = parsed.errors.length > 0 ? parsed.errors.join("\n") : null;
       if (parseErrorText) {
         setBatchError(parseErrorText);

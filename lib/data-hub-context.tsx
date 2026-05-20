@@ -25,6 +25,8 @@ import {
   parseCommissionRows,
 } from "./commission-parsing";
 import { parseAlternativeShippingRows } from "./shipping-alternative-parsing";
+import { isSkippableShippingRow, selectShippingSheetName } from "./shipping-workbook";
+import { parseEuropeanNumber } from "./number-parsing";
 
 // 佣金阶梯金额边界
 const TIER_BOUNDARIES = [
@@ -103,18 +105,6 @@ function safeLocalStorageSet(key: string, value: string): { success: boolean; er
 }
 
 /**
- * 欧式数字清洗器
- * 处理俄罗斯/欧洲导出表格中的千分位空格和逗号小数点
- * 如: "30,000" → 30000, "30 000" → 30000, "30.5" → 30.5
- */
-function parseEuropeanNumber(val: string | number | null | undefined): number {
-  if (val === null || val === undefined || val === '' || val === '-') return 0;
-  const cleanVal = String(val).replace(/\s/g, '').replace(',', '.');
-  const num = parseFloat(cleanVal.replace(/[^\d.-]/g, ''));
-  return isNaN(num) ? 0 : num;
-}
-
-/**
  * 智能寻找真实表头行（物流表 XLSX）
  * 查找包含 "配送方式"、"第三方物流" 或 "尺寸限制" 的行
  */
@@ -123,6 +113,9 @@ function findShippingHeaderRow(rows: string[][]): number {
     const row = rows[i];
     const joined = row.join(" ").toLowerCase();
     if (joined.includes("配送方式") && (joined.includes("尺寸限制") || joined.includes("重量限制"))) {
+      return i;
+    }
+    if (joined.includes("scoring group") && joined.includes("delivery method") && joined.includes("shipment weight limits")) {
       return i;
     }
     if (joined.includes("deliveryvariant") && joined.includes("weight")) {
@@ -257,8 +250,14 @@ function parseVolumetricDivisorFromRow(rawValue: string, billingType: string): n
 function parseVolumetricDivisorFromBillingType(billingType: string): number {
   const normalized = (billingType || "").toLowerCase();
   
-  // 纯实际重量：不计抛
-  if (normalized.includes("实际") && !normalized.includes("最大") && !normalized.includes("取大") && !normalized.includes("max")) {
+  // 纯实际重量 / physical weight：不计抛
+  if (
+    (normalized.includes("实际") || normalized.includes("physical")) &&
+    !normalized.includes("最大") &&
+    !normalized.includes("取大") &&
+    !normalized.includes("max") &&
+    !normalized.includes("volume")
+  ) {
     return 0;
   }
   
@@ -273,7 +272,7 @@ function parseVolumetricDivisorFromBillingType(billingType: string): number {
   }
   
   // 取大/体积/默认 → 12000
-  if (normalized.includes("取大") || normalized.includes("最大") || normalized.includes("max") || normalized.includes("体积")) {
+  if (normalized.includes("取大") || normalized.includes("最大") || normalized.includes("max") || normalized.includes("体积") || normalized.includes("volume")) {
     return 12000;
   }
   
@@ -550,7 +549,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         for (const row of dataRows) {
           try {
             const name = fieldMapping.name >= 0 ? row[fieldMapping.name]?.trim() : "";
-            if (!name || name === "" || name === "-") continue;
+            if (isSkippableShippingRow(row, name)) continue;
 
             const serviceLevel = fieldMapping.serviceLevel >= 0 ? row[fieldMapping.serviceLevel]?.trim() || "" : "";
             let uniqueId = generateShippingUniqueId(name, serviceLevel);
@@ -643,13 +642,9 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             const data = new Uint8Array(e.target?.result as ArrayBuffer);
             const workbook = XLSX.read(data, { type: "array" });
 
-            // 优先寻找 "中国 rFBS" sheet
-            let sheetName = workbook.SheetNames.find(n => n.includes("rFBS") || n.includes("中国"));
+            const sheetName = selectShippingSheetName(workbook.SheetNames);
             if (!sheetName) {
-              sheetName = workbook.SheetNames.find(n => n.includes("Список") || n.includes("3PL"));
-            }
-            if (!sheetName) {
-              sheetName = workbook.SheetNames[0];
+              throw new Error("未找到可解析的物流工作表");
             }
 
             const worksheet = workbook.Sheets[sheetName];

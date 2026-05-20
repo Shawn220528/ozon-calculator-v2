@@ -1,5 +1,7 @@
 const path = require("node:path");
+const fs = require("node:fs");
 const Papa = require("papaparse");
+const XLSX = require("xlsx");
 const { loadTsModule } = require("./ts-module-loader");
 
 const {
@@ -33,6 +35,23 @@ const {
   calculateOzonBackendPricing,
 } = loadTsModule(path.join("lib", "ozon-pricing.ts"));
 
+const {
+  parseEuropeanNumber,
+} = loadTsModule(path.join("lib", "number-parsing.ts"));
+
+const {
+  buildColumnMapping,
+} = loadTsModule(path.join("lib", "constants.ts"));
+
+const {
+  smartParseCSV,
+} = loadTsModule(path.join("lib", "smart-parser.ts"));
+
+const {
+  isSkippableShippingRow,
+  selectShippingSheetName,
+} = loadTsModule(path.join("lib", "shipping-workbook.ts"));
+
 function assertDeepEqual(actual, expected, label) {
   const a = JSON.stringify(actual);
   const e = JSON.stringify(expected);
@@ -62,6 +81,51 @@ function assertCsvRowsAligned(csvContent, label) {
   });
 }
 
+function assertSmartShippingWorkbookMapping(workbookPath, label) {
+  if (!fs.existsSync(workbookPath)) {
+    return;
+  }
+
+  const workbook = XLSX.readFile(workbookPath, { cellDates: false });
+  const sheetName = selectShippingSheetName(workbook.SheetNames);
+  if (!["中国 rFBS", "CHINA rFBS"].includes(sheetName)) {
+    throw new Error(`${label} selected unexpected sheet: ${sheetName}`);
+  }
+
+  const csvContent = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
+  if (csvContent.includes("[Content_Types].xml") || /^PK/.test(csvContent.trim())) {
+    throw new Error(`${label} should convert XLSX worksheet content, not zip binary text`);
+  }
+
+  const parsed = smartParseCSV(csvContent, "shipping");
+  assertEqual(parsed.errors.length, 0, `${label} smart parse errors`);
+
+  const requiredFields = ["serviceTier", "serviceLevel", "thirdParty", "name", "rate"];
+  const interceptorFields = [
+    "deliveryTime",
+    "minWeight",
+    "maxWeight",
+    "dimension",
+    "valueRUB",
+    "valueRMB",
+    "battery",
+    "liquid",
+  ];
+
+  [...requiredFields, ...interceptorFields].forEach((field) => {
+    const mapping = parsed.mappings.find((item) => item.systemField === field);
+    if (!mapping || mapping.columnIndex < 0) {
+      throw new Error(`${label} missing smart mapping for ${field}`);
+    }
+  });
+
+  assertEqual(parsed.recognizedCount, parsed.totalCount, `${label} should recognize every logistics field`);
+  const previewText = parsed.rows.slice(0, 5).flat().join(" | ");
+  if (!/ATC Express Extra Small|GUOO Express Extra Small/.test(previewText)) {
+    throw new Error(`${label} preview should contain real shipping rows`);
+  }
+}
+
 [
   ["5-14", { min: 5, max: 14, normalizedFromDate: false }],
   ["5月14日", { min: 5, max: 14, normalizedFromDate: true }],
@@ -77,6 +141,12 @@ assertDeepEqual(parseValueRange("0.01 - 135"), { min: 0.01, max: 135, hasLimit: 
 assertDeepEqual(parseValueRange("1 - 1500"), { min: 1, max: 1500, hasLimit: true }, "RUB value range");
 assertDeepEqual(parseValueRange("-"), { min: 0, max: 0, hasLimit: false }, "empty value range");
 assertEqual(normalizeLimitValue(999999), undefined, "999999 should mean no limit");
+assertEqual(parseEuropeanNumber("30,000"), 30000, "comma thousands number");
+assertEqual(parseEuropeanNumber("30 000"), 30000, "space thousands number");
+assertEqual(parseEuropeanNumber("30,000.5"), 30000.5, "comma thousands with dot decimal number");
+assertEqual(parseEuropeanNumber("0,03432"), 0.03432, "comma decimal number");
+assertEqual(parseEuropeanNumber("2,6"), 2.6, "single comma decimal number");
+assertEqual(parseEuropeanNumber("30.5"), 30.5, "dot decimal number");
 
 assertDeepEqual(
   parseShippingRateString("¥3.12 + ¥0.0468/1 g"),
@@ -174,6 +244,71 @@ assertDeepEqual(
 );
 assertEqual(calculateOzonBackendPricing(0, 12).isValid, false, "Ozon pricing invalid without price");
 assertEqual(calculateOzonBackendPricing(125, 0).isValid, false, "Ozon pricing invalid without rate");
+
+const newShippingWorkbook = "E:\\CodexProjects\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx";
+if (fs.existsSync(newShippingWorkbook)) {
+  const workbook = XLSX.readFile(newShippingWorkbook, { cellDates: false });
+  assertEqual(selectShippingSheetName(workbook.SheetNames), "中国 rFBS", "new shipping workbook sheet selection");
+
+  const englishRows = XLSX.utils.sheet_to_json(workbook.Sheets["CHINA rFBS"], { header: 1, defval: "", raw: false });
+  assertDeepEqual(
+    buildColumnMapping(englishRows[4]),
+    {
+      serviceTier: 0,
+      serviceLevel: 1,
+      thirdParty: 2,
+      name: 3,
+      rating: 4,
+      deliveryTime: 5,
+      rate: 6,
+      battery: 7,
+      liquid: 8,
+      dimension: 9,
+      minWeight: 10,
+      maxWeight: 11,
+      valueRUB: 12,
+      valueRMB: 13,
+      billingType: 16,
+      volumetricDivisor: 17,
+    },
+    "new English shipping headers"
+  );
+  assertEqual(isSkippableShippingRow(englishRows[11], "переход"), true, "transition rows should be skipped");
+}
+
+function assertFirstBudgetWeight(workbookPath, label) {
+  if (!fs.existsSync(workbookPath)) {
+    return;
+  }
+
+  const workbook = XLSX.readFile(workbookPath, { cellDates: false });
+  const sheetName = selectShippingSheetName(workbook.SheetNames);
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false });
+  const budgetRow = rows.find((row) => String(row[0]).trim() === "Budget");
+  if (!budgetRow) {
+    throw new Error(`${label} missing Budget row`);
+  }
+
+  assertEqual(parseEuropeanNumber(budgetRow[10]), 501, `${label} Budget min weight`);
+  assertEqual(parseEuropeanNumber(budgetRow[11]), 30000, `${label} Budget max weight`);
+}
+
+assertSmartShippingWorkbookMapping(
+  "E:\\CodexProjects\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx",
+  "new shipping workbook smart mapping"
+);
+assertFirstBudgetWeight(
+  "E:\\CodexProjects\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx",
+  "new shipping workbook"
+);
+assertSmartShippingWorkbookMapping(
+  "E:\\OpenCode\\ozon-rfbs-calculator\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx",
+  "uploaded shipping workbook smart mapping"
+);
+assertFirstBudgetWeight(
+  "E:\\OpenCode\\ozon-rfbs-calculator\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx",
+  "uploaded shipping workbook"
+);
 
 const alternativeShipping = parseAlternativeShippingRows([
   ["Лого", "Метод", "Рейтинг Ozon", "Сроки доставки", "ПВЗ", "Курьер", "Батарейки"],

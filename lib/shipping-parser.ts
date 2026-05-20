@@ -1,32 +1,11 @@
+import { parseEuropeanNumber } from "./number-parsing";
+
 // ========================================================
 // 物流 CSV 解析 - 模糊字段映射字典
 // Fuzzy Column Mapping for Shipping CSV Parsing
 // ========================================================
 
-/**
- * 欧式数字清洗器
- * 俄罗斯/欧洲导出的表格中，数字带有千分位空格或使用逗号作为小数点
- * 如: 150 000,00 -> 150000.00
- */
-export function parseEuropeanNumber(val: string | number | null | undefined): number {
-  if (val === null || val === undefined || val === '' || val === '-') {
-    return 0;
-  }
-  
-  // 1. 转为字符串
-  let cleanVal = String(val);
-  
-  // 2. 去除所有空格（千分位空格）
-  cleanVal = cleanVal.replace(/\s/g, '');
-  
-  // 3. 将欧洲小数点的逗号替换为点
-  cleanVal = cleanVal.replace(',', '.');
-  
-  // 4. 提取数字部分（保留小数点和负号）
-  const num = parseFloat(cleanVal.replace(/[^\d.-]/g, ''));
-  
-  return isNaN(num) ? 0 : num;
-}
+export { parseEuropeanNumber };
 
 /**
  * 提取数字并无视空格和逗号 (解决 "250 000" 和 "30,000" 的问题)

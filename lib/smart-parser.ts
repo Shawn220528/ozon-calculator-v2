@@ -4,7 +4,7 @@
  */
 
 // 🔴 生产环境静默日志
-const isDev = process.env.NODE_ENV === 'development';
+const isDev = typeof process !== "undefined" && process.env.NODE_ENV === 'development';
 const devLog = isDev ? console.log : () => {};
 const devWarn = isDev ? console.warn : () => {};
 
@@ -52,26 +52,26 @@ export interface LogisticsSchemaField {
 
 export const LOGISTICS_SCHEMA: LogisticsSchemaField[] = [
   // --- 基础必填项 (不可关闭筛选) ---
-  { key: 'serviceTier', label: '评分组', type: 'string', required: true, aliases: ['评分组', 'Scoring', 'tier', 'Extra Small', 'Small', 'Big', 'Budget'] },
+  { key: 'serviceTier', label: '评分组', type: 'string', required: true, aliases: ['评分组', 'Scoring Group', 'Scoring', 'tier', 'Extra Small', 'Small', 'Big', 'Budget'] },
   { key: 'serviceLevel', label: '服务等级', type: 'string', required: true, aliases: ['服务等级', 'Service', 'level', '等级', 'Express', 'Standard', 'Economy'] },
   { key: 'thirdParty', label: '第三方物流', type: 'string', required: true, aliases: ['第三方物流', '3PL', 'carrier', '物流商', 'RETS', 'ZTO', 'ATC', 'GUOO'] },
-  { key: 'name', label: '配送方式', type: 'string', required: true, aliases: ['配送方式', 'Method', 'channel', '方式', 'RETS Express', 'ZTO Standard'] },
-  { key: 'rate', label: '费率', type: 'string', required: true, aliases: ['费率', 'rate', '费用', '运费', '费率（PUDO揽收点揽收'] },
+  { key: 'name', label: '配送方式', type: 'string', required: true, aliases: ['配送方式', 'Delivery Method', 'Method', 'channel', '方式', 'RETS Express', 'ZTO Standard'] },
+  { key: 'rate', label: '费率', type: 'string', required: true, aliases: ['费率', 'Rates (PUDO / Courier)', 'rate', '费用', '运费', '费率（PUDO揽收点揽收'] },
 
   // --- 拦截限制项 (深度参与筛选，用户可开关) ---
   { key: 'rating', label: 'Ozon评级', type: 'number', required: false, interceptor: true, aliases: ['Ozon评级', 'Rating', '评分', 'Ozon'] },
-  { key: 'deliveryTime', label: '时效 (天)', type: 'string', required: false, interceptor: true, aliases: ['时效限制', '时效', 'delivery time', '天'] },
-  { key: 'minWeight', label: '最小实重 (g)', type: 'number', required: false, interceptor: true, aliases: ['货件重量限制 / 最小', '最小重量', 'min weight', '最小（克）'] },
-  { key: 'maxWeight', label: '最大实重 (g)', type: 'number', required: false, interceptor: true, aliases: ['货件重量限制 / 最大', '最大重量', 'max weight', '最大（克）'] },
-  { key: 'dimension', label: '尺寸限制', type: 'string', required: false, interceptor: true, aliases: ['尺寸限制', '尺寸限制，最大（厘米）', 'dimensions', '最大（厘米）', '边长总和'] },
-  { key: 'valueRUB', label: '货值限制(卢布)', type: 'string', required: false, interceptor: true, aliases: ['货值限制/最低-最高（卢布）', '货值限制卢布', '卢布', 'rub', 'max value rub'] },
-  { key: 'valueRMB', label: '货值限制(人民币)', type: 'string', required: false, interceptor: true, aliases: ['货值限制/最低-最高（人民币）', '货值限制人民币', '货值限制-人民币', '人民币', 'rmb', 'cny'] },
-  { key: 'battery', label: '电池', type: 'boolean', required: false, interceptor: true, aliases: ['电池', 'battery'] },
-  { key: 'liquid', label: '液体', type: 'boolean', required: false, interceptor: true, aliases: ['液体', 'liquid'] },
+  { key: 'deliveryTime', label: '时效 (天)', type: 'string', required: false, interceptor: true, aliases: ['时效限制', 'Time-limits', '时效', 'delivery time', '天'] },
+  { key: 'minWeight', label: '最小实重 (g)', type: 'number', required: false, interceptor: true, aliases: ['货件重量限制 / 最小', 'Shipment weight limits / min g', '最小重量', 'min weight', '最小（克）'] },
+  { key: 'maxWeight', label: '最大实重 (g)', type: 'number', required: false, interceptor: true, aliases: ['货件重量限制 / 最大', 'Shipment weight limits / max g', '最大重量', 'max weight', '最大（克）'] },
+  { key: 'dimension', label: '尺寸限制', type: 'string', required: false, interceptor: true, aliases: ['尺寸限制', '尺寸限制，最大（厘米）', 'Measurements, max cm', 'dimensions', '最大（厘米）', '边长总和'] },
+  { key: 'valueRUB', label: '货值限制(卢布)', type: 'string', required: false, interceptor: true, aliases: ['货值限制/最低-最高（卢布）', 'Shipment cost limit / min-max RUB', '货值限制卢布', '卢布', 'rub', 'max value rub'] },
+  { key: 'valueRMB', label: '货值限制(人民币)', type: 'string', required: false, interceptor: true, aliases: ['货值限制/最低-最高（人民币）', 'Shipment cost limit / min-max CNY', '货值限制人民币', '货值限制-人民币', '人民币', 'rmb', 'cny'] },
+  { key: 'battery', label: '电池', type: 'boolean', required: false, interceptor: true, aliases: ['电池', 'Batteries', 'battery'] },
+  { key: 'liquid', label: '液体', type: 'boolean', required: false, interceptor: true, aliases: ['液体', 'Liquids', 'liquid'] },
   
   // --- 计费与可选字段 ---
-  { key: 'billingType', label: '计费类型', type: 'string', required: false, aliases: ['计费类型', 'billing', '实际重量'] },
-  { key: 'volumetricDivisor', label: '体积重除数', type: 'number', required: false, aliases: ['体积重量计算方式', 'volumetric'] },
+  { key: 'billingType', label: '计费类型', type: 'string', required: false, aliases: ['计费类型', 'Tarification type', 'billing', '实际重量'] },
+  { key: 'volumetricDivisor', label: '体积重除数', type: 'number', required: false, aliases: ['体积重量计算方式', 'Volume weight calculation', 'volumetric'] },
 ];
 
 // 拦截配置类型
@@ -243,7 +243,7 @@ const COMMISSION_SYNONYMS: SynonymBank = {
 const SHIPPING_SYNONYMS: SynonymBank = {
   name: [
     "配送方式", "物流方式", "渠道名称", "运输方式",
-    "shipping method", "channel", "provider", "carrier"
+    "delivery method", "shipping method", "channel", "provider", "carrier"
   ],
   thirdParty: [
     "第三方物流", "物流商", "承运商", "服务商",
@@ -253,9 +253,12 @@ const SHIPPING_SYNONYMS: SynonymBank = {
     "服务等级", "物流等级", "配送等级",
     "service level", "tier", "level"
   ],
+  serviceTier: [
+    "评分组", "服务组", "scoring group", "service tier", "service group"
+  ],
   rate: [
     "费率", "价格", "费用", "运费",
-    "rate", "price", "fee", "cost", "тариф"
+    "rates (pudo / courier)", "rates", "rate", "price", "fee", "cost", "тариф"
   ],
   minWeight: [
     "最小重量", "起重量", "重量下限",
@@ -279,31 +282,37 @@ const SHIPPING_SYNONYMS: SynonymBank = {
   ],
   deliveryTime: [
     "时效", "配送时效", "运输时间", "时效限制",
-    "delivery time", "shipping time", "transit time"
+    "time-limits", "delivery time", "shipping time", "transit time"
   ],
   // 🔹 新增：尺寸限制约束字段
   dimension: [
     "尺寸限制", "最大尺寸", "边长总和", "尺寸约束",
-    "dimensions", "size limit", "dimension limit", "size constraints",
+    "measurements, max cm", "dimensions", "size limit", "dimension limit", "size constraints",
     "体积限制", "包装限制"
   ],
   // 🔹 新增：电池和液体属性字段
   battery: [
     "电池", "是否带电", "电池限制", "电池属性",
-    "battery", "battery allowed", "battery limit"
+    "batteries", "battery", "battery allowed", "battery limit"
   ],
   liquid: [
     "液体", "是否带液体", "液体限制", "液体属性",
-    "liquid", "liquid allowed", "liquid limit"
+    "liquids", "liquid", "liquid allowed", "liquid limit"
   ],
   // 🔹 新增：货值限制字段
   valueRUB: [
     "货值限制/最低-最高（卢布）", "货值限制卢布", "货值限制（卢布）", "卢布",
-    "max value rub", "value rub", "rub"
+    "shipment cost limit / min-max rub", "max value rub", "value rub", "rub"
   ],
   valueRMB: [
     "货值限制/最低-最高（人民币）", "货值限制人民币", "货值限制-人民币", "人民币",
-    "max value rmb", "value rmb", "cny", "rmb"
+    "shipment cost limit / min-max cny", "max value rmb", "value rmb", "cny", "rmb"
+  ],
+  billingType: [
+    "计费类型", "计费方式", "tarification type", "billing type"
+  ],
+  volumetricDivisor: [
+    "体积重量计算方式", "体积重除数", "volume weight calculation", "volumetric"
   ],
 };
 
@@ -710,7 +719,17 @@ export function validateSizeConstraints(
 function findHeaderRow(lines: string[], type: "commission" | "shipping"): number {
   const keywords = type === "commission" 
     ? ["一级类目", "secondary category", "primary category", "类目"]
-    : ["配送方式", "物流商", "shipping", "provider", "渠道"];
+    : [
+        "配送方式",
+        "物流商",
+        "shipping",
+        "provider",
+        "渠道",
+        "scoring group",
+        "delivery method",
+        "shipment weight limits",
+        "rates (pudo / courier)",
+      ];
   
   for (let i = 0; i < Math.min(lines.length, 20); i++) {
     const line = lines[i].toLowerCase();

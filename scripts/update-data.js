@@ -8,6 +8,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const Papa = require("papaparse");
+const XLSX = require("xlsx");
 const { loadTsModule } = require("./ts-module-loader");
 
 const {
@@ -19,6 +20,13 @@ const {
   parseShippingRateString,
   parseValueRange,
 } = loadTsModule(path.join("lib", "logistics-parsing.ts"));
+const {
+  isSkippableShippingRow,
+  selectShippingSheetName,
+} = loadTsModule(path.join("lib", "shipping-workbook.ts"));
+const {
+  parseEuropeanNumber: parseLocalizedNumber,
+} = loadTsModule(path.join("lib", "number-parsing.ts"));
 
 function parseArgs(argv) {
   const args = {
@@ -53,21 +61,34 @@ function parseCsvRows(csvContent, label) {
   return parsed.data;
 }
 
+function readWorkbookRows(filePath) {
+  const workbook = XLSX.readFile(filePath, { cellDates: false });
+  const sheetName = selectShippingSheetName(workbook.SheetNames);
+  if (!sheetName) {
+    throw new Error("未找到可解析的物流工作表");
+  }
+  const worksheet = workbook.Sheets[sheetName];
+  return {
+    sheetName,
+    rows: XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "", raw: false }),
+  };
+}
+
 function parseEuropeanNumber(value, fallback = 0) {
   if (value === null || value === undefined || value === "" || value === "-") return fallback;
-  const cleaned = String(value).replace(/\s/g, "").replace(",", ".");
-  const parsed = Number.parseFloat(cleaned.replace(/[^\d.-]/g, ""));
+  const parsed = parseLocalizedNumber(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function parseDimensionString(dimStr) {
   const result = { maxSum: 999, maxLength: 999 };
   if (!dimStr || String(dimStr).trim() === "") return result;
+  const value = String(dimStr);
 
-  const sumMatch = String(dimStr).match(/(?:总和|三边和).*?[≤<=>=]+\s*(\d+)/);
+  const sumMatch = value.match(/(?:总和|三边和|sum of sides|sum).*?[≤<=>=]+\s*(\d+)/i);
   if (sumMatch) result.maxSum = Number.parseInt(sumMatch[1], 10);
 
-  const lengthMatch = String(dimStr).match(/长边.*?[≤<=>=]+\s*(\d+)/);
+  const lengthMatch = value.match(/(?:长边|最长边|length).*?[≤<=>=]+\s*(\d+)/i);
   if (lengthMatch) result.maxLength = Number.parseInt(lengthMatch[1], 10);
 
   return result;
@@ -75,7 +96,13 @@ function parseDimensionString(dimStr) {
 
 function parseVolumetricDivisorFromBillingType(billingType) {
   const normalized = String(billingType || "").toLowerCase();
-  if (normalized.includes("实际") && !normalized.includes("最大") && !normalized.includes("取大") && !normalized.includes("max")) {
+  if (
+    (normalized.includes("实际") || normalized.includes("physical")) &&
+    !normalized.includes("最大") &&
+    !normalized.includes("取大") &&
+    !normalized.includes("max") &&
+    !normalized.includes("volume")
+  ) {
     return 0;
   }
 
@@ -85,7 +112,7 @@ function parseVolumetricDivisorFromBillingType(billingType) {
     if (divisor >= 1000 && divisor <= 20000) return divisor;
   }
 
-  if (normalized.includes("取大") || normalized.includes("最大") || normalized.includes("max") || normalized.includes("体积")) {
+  if (normalized.includes("取大") || normalized.includes("最大") || normalized.includes("max") || normalized.includes("体积") || normalized.includes("volume")) {
     return 12000;
   }
 
@@ -116,6 +143,7 @@ function findShippingHeaderRow(rows) {
     if (
       (joined.includes("配送方式") && joined.includes("第三方物流")) ||
       (joined.includes("尺寸限制") && joined.includes("货值限制")) ||
+      (joined.includes("scoring group") && joined.includes("delivery method") && joined.includes("shipment weight limits")) ||
       joined.includes("shipping")
     ) {
       return i;
@@ -140,7 +168,10 @@ function parseValueLimit(value) {
 }
 
 function parseShippingCSV(csvContent) {
-  const rows = parseCsvRows(csvContent, "物流表");
+  return parseShippingRows(parseCsvRows(csvContent, "物流表"));
+}
+
+function parseShippingRows(rows) {
   const headerIdx = findShippingHeaderRow(rows);
   if (headerIdx === -1) {
     throw new Error("未找到物流表头行（需要包含配送方式/第三方物流/尺寸限制等字段）");
@@ -151,7 +182,7 @@ function parseShippingCSV(csvContent) {
 
   for (const row of rows.slice(headerIdx + 1)) {
     const name = row[3]?.trim();
-    if (!name || name === "-") continue;
+    if (isSkippableShippingRow(row, name)) continue;
 
     const serviceTier = row[0] || "";
     const serviceLevel = row[1] || "";
@@ -244,9 +275,16 @@ async function main() {
     console.log("读取物流数据:", args.shipping);
 
     const commissionCSV = fs.readFileSync(args.commission, "utf8");
-    const shippingCSV = fs.readFileSync(args.shipping, "utf8");
     const commissions = parseCommissionRows(parseCsvRows(commissionCSV, "佣金表"));
-    const channels = parseShippingCSV(shippingCSV);
+    const shippingExt = path.extname(args.shipping).toLowerCase();
+    const channels =
+      shippingExt === ".xlsx" || shippingExt === ".xls"
+        ? (() => {
+            const { sheetName, rows } = readWorkbookRows(args.shipping);
+            console.log("物流工作表:", sheetName);
+            return parseShippingRows(rows);
+          })()
+        : parseShippingCSV(fs.readFileSync(args.shipping, "utf8"));
     printSummary(commissions, channels);
 
     if (args.checkOnly) {
