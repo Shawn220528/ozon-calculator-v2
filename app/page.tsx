@@ -217,7 +217,6 @@ export default function Home() {
   const [input, setInput] = useState<CalculationInput>(DEFAULT_INPUT);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [marginError, setMarginError] = useState<string | null>(null);
-  const [lockedChannelId, setLockedChannelId] = useState<string | null>(null); // 🔹 物流商锁定状态
   const [showAllAvailable, setShowAllAvailable] = useState(false); // 🔹 显示全部可用渠道
   const [showAllUnavailable, setShowAllUnavailable] = useState(false); // 🔹 显示全部不可用渠道
   const [sortMode, setSortMode] = useState<'cost' | 'time' | 'rating'>('cost'); // 🔹 推荐物流排序模式
@@ -332,12 +331,8 @@ export default function Home() {
         setInput({ ...DEFAULT_INPUT, ...parsedData, valueLimitCurrency: parsedData.valueLimitCurrency || "RMB" });
       }
       
-      // 🔹 恢复锁定的物流商
-      const savedLockedChannel = localStorage.getItem("ozon-locked-channel");
-      if (savedLockedChannel) {
-        setLockedChannelId(savedLockedChannel);
-        setSelectedChannelId(savedLockedChannel);
-      }
+      // 旧版本会持久锁定物流渠道；新版只保留当前会话临时选择。
+      localStorage.removeItem("ozon-locked-channel");
 
       // 🔹 恢复利润率锁定状态
       const savedLockedMargin = localStorage.getItem("ozon-locked-margin");
@@ -445,20 +440,42 @@ export default function Home() {
 
   // 🔹 推荐物流排序：按费用/时效/评分排序（定义在 channelCosts 之后，见下方）
 
-  // 默认选中价格最优渠道（如果已锁定，则使用锁定的渠道）
-  const selectedChannel = useMemo(() => {
-    // 🔹 优先使用锁定的物流商
-    if (lockedChannelId) {
-      const lockedChannel = shippingChannels.available.find((c) => c.id === lockedChannelId);
-      if (lockedChannel) return lockedChannel;
+  const getRecommendedChannel = useCallback((channels: ShippingChannel[]) => {
+    const sorted = [...channels];
+    switch (sortMode) {
+      case "cost":
+        sorted.sort((a, b) => {
+          const costA = calculateShippingCost(a, input.weight, input.length, input.width, input.height, input.weight);
+          const costB = calculateShippingCost(b, input.weight, input.length, input.width, input.height, input.weight);
+          return costA - costB;
+        });
+        break;
+      case "time":
+        sorted.sort((a, b) => a.deliveryTime - b.deliveryTime);
+        break;
+      case "rating":
+        sorted.sort((a, b) => (b.ozonRating || 0) - (a.ozonRating || 0));
+        break;
     }
-    
+    return sorted[0] || null;
+  }, [input.height, input.length, input.weight, input.width, sortMode]);
+
+  useEffect(() => {
+    if (!selectedChannelId) return;
+    const stillAvailable = shippingChannels.available.some((channel) => channel.id === selectedChannelId);
+    if (!stillAvailable) {
+      setSelectedChannelId(null);
+    }
+  }, [selectedChannelId, shippingChannels.available]);
+
+  // 默认选中当前推荐排序下的第一条；用户点击后仅当前会话临时选择。
+  const selectedChannel = useMemo(() => {
     if (selectedChannelId) {
       const ch = shippingChannels.available.find((c) => c.id === selectedChannelId);
       if (ch) return ch;
     }
-    return shippingChannels.available[0] || null;
-  }, [selectedChannelId, shippingChannels.available, lockedChannelId]);
+    return getRecommendedChannel(shippingChannels.available);
+  }, [selectedChannelId, shippingChannels.available, getRecommendedChannel]);
 
   // 🔹 创建计算用的 input（使用实际 RUB/CNY 汇率）
   const effectiveInput = useMemo(() => {
@@ -580,16 +597,6 @@ export default function Home() {
 
   const handleSelectChannel = useCallback((channel: ShippingChannel) => {
     setSelectedChannelId(channel.id);
-    // 🔹 点击即锁定：将选中的物流商设为锁定状态
-    setLockedChannelId(channel.id);
-    localStorage.setItem("ozon-locked-channel", channel.id);
-  }, []);
-  
-  // 🔹 解锁/恢复自动匹配
-  const handleUnlockChannel = useCallback(() => {
-    setLockedChannelId(null);
-    setSelectedChannelId(null);
-    localStorage.removeItem("ozon-locked-channel");
   }, []);
   
   // 🔹 切换渠道收藏
@@ -647,7 +654,7 @@ export default function Home() {
       "⚠️ 确定要重置所有数据吗？\n\n" +
       "此操作将：\n" +
       "• 清空所有输入参数（尺寸、重量、成本等）\n" +
-      "• 解除物流商锁定\n" +
+      "• 清除临时物流选择\n" +
       "• 清除所有缓存数据\n\n" +
       "此操作不可撤销！"
     );
@@ -658,7 +665,6 @@ export default function Home() {
     setInput(DEFAULT_INPUT);
     setSelectedChannelId(null);
     setMarginError(null);
-    setLockedChannelId(null);
     setLockedMargin(null);
     
     // ===== 2. 持久化存储清理 =====
@@ -1792,8 +1798,6 @@ export default function Home() {
               allShippingChannels={shippingData}
               selectedChannel={selectedChannel}
               onSelectChannel={handleSelectChannel}
-              lockedChannelId={lockedChannelId}
-              onUnlockChannel={handleUnlockChannel}
               profitCurve={profitCurve}
               stressTest={stressTest}
               multiItemProfit={multiItemProfit}
@@ -1910,17 +1914,12 @@ export default function Home() {
               <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs shadow-sm">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="font-bold text-indigo-800">当前物流：{selectedChannel.thirdParty || "Ozon"} / {selectedChannel.name}</div>
+                    <div className="font-bold text-indigo-800">当前计算物流：{selectedChannel.thirdParty || "Ozon"} / {selectedChannel.name}</div>
                     <div className="mt-0.5 truncate text-indigo-600">
                       费用 ¥{(channelCosts.get(selectedChannel.id) ?? 0).toFixed(2)}
                       {selectedBillingInfo?.isVolumetric ? ` · 计抛 ${selectedBillingInfo.billingWeight.toFixed(0)}g` : ` · 实重 ${selectedBillingInfo?.billingWeight?.toFixed(0) || input.weight}g`}
                     </div>
                   </div>
-                  {lockedChannelId && (
-                    <Button type="button" size="xs" variant="outline" onClick={handleUnlockChannel} className="shrink-0">
-                      解锁
-                    </Button>
-                  )}
                 </div>
               </div>
             )}

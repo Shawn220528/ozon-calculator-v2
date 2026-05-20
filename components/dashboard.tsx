@@ -68,8 +68,6 @@ interface DashboardProps {
   allShippingChannels: ShippingChannel[];
   selectedChannel: ShippingChannel | null;
   onSelectChannel: (channel: ShippingChannel) => void;
-  lockedChannelId?: string | null;
-  onUnlockChannel?: () => void;
   profitCurve: { priceRMB: number; priceRUB: number; profit: number; commissionRate: number }[];
   stressTest: {
     at5PercentDrop: number;
@@ -125,8 +123,6 @@ export function Dashboard({
   allShippingChannels,
   selectedChannel,
   onSelectChannel,
-  lockedChannelId,
-  onUnlockChannel,
   profitCurve,
   stressTest,
   multiItemProfit,
