@@ -1416,11 +1416,7 @@ const DEFAULT_SHIPPING_DATA: ShippingChannel[] = [
  * - 仅因货值被拦截 → 可通过调价修复
  * - 有其他原因(尺寸/重量/属性) → 调价无法修复
  */
-export function calculateSuggestedPrice(
-  unavailableChannels: UnavailableShippingChannel[],
-  exchangeRate: number, // RUB/CNY
-  valueLimitCurrency: "RMB" | "RUB" = "RMB"
-): {
+export interface SuggestedPriceResult {
   suggestedPriceRMB: number;       // 建议最低售价(RMB)
   suggestedPriceRUB: number;       // 建议最低售价(RUB)
   channelName: string;             // 对应渠道名
@@ -1428,11 +1424,48 @@ export function calculateSuggestedPrice(
     channelName: string;
     minValueRUB: number;
     minPriceRMB: number;
+    suggestedPriceRMB: number;
+    profitPriceRMB?: number;
+    logisticsPriceRMB: number;
+    reason: "profit-target" | "logistics-threshold";
   }>;
   unfixableChannelCount: number;   // 不可修复渠道数量
   cannotFixByPrice: boolean;       // 是否所有渠道都不可通过调价修复
-} {
-  const fixableChannels: Array<{ channelName: string; minValueRUB: number; minPriceRMB: number }> = [];
+  reason: "profit-target" | "logistics-threshold" | "none";
+  targetMargin: number | null;
+  profitPriceRMB?: number;
+  logisticsPriceRMB: number;
+}
+
+function getValueLimitRmb(
+  channel: ShippingChannel,
+  exchangeRate: number,
+  valueLimitCurrency: "RMB" | "RUB",
+  boundary: "min" | "max"
+): number | undefined {
+  const rmbValue = boundary === "min" ? channel.minValue : channel.maxValue;
+  const rubValue = boundary === "min" ? channel.minValueRUB : channel.maxValueRUB;
+
+  if (valueLimitCurrency === "RMB") {
+    if (rmbValue !== undefined && rmbValue !== null) return rmbValue;
+    if (rubValue !== undefined && rubValue !== null) return rubToCny(rubValue, exchangeRate);
+    return boundary === "min" ? 0 : undefined;
+  }
+
+  if (rubValue !== undefined && rubValue !== null) return rubToCny(rubValue, exchangeRate);
+  if (rmbValue !== undefined && rmbValue !== null) return rmbValue;
+  return boundary === "min" ? 0 : undefined;
+}
+
+export function calculateSuggestedPrice(
+  unavailableChannels: UnavailableShippingChannel[],
+  exchangeRate: number, // RUB/CNY
+  valueLimitCurrency: "RMB" | "RUB" = "RMB",
+  input?: CalculationInput,
+  commission?: CategoryCommission | null,
+  targetMargin = 20
+): SuggestedPriceResult {
+  const fixableChannels: SuggestedPriceResult["fixableChannels"] = [];
   let unfixableCount = 0;
 
   for (const ch of unavailableChannels) {
@@ -1442,17 +1475,46 @@ export function calculateSuggestedPrice(
     const hasOtherReason = ch.interceptionReasons.some(r => r.dimension !== "货值");
     
     if (hasPriceReason && !hasOtherReason) {
-      // 仅因货值被拦截 → 可通过调价修复
-      const minPriceRMB =
-        valueLimitCurrency === "RMB"
-          ? ch.minValue || (ch.minValueRUB ? rubToCny(ch.minValueRUB, exchangeRate) : 0)
-          : ch.minValueRUB ? rubToCny(ch.minValueRUB, exchangeRate) : ch.minValue || 0;
-      const minValueRUB = ch.minValueRUB || cnyToRub(minPriceRMB, exchangeRate);
-      if (minPriceRMB > 0) {
+      const logisticsPriceRMB = getValueLimitRmb(ch, exchangeRate, valueLimitCurrency, "min") || 0;
+      const maxPriceRMB = getValueLimitRmb(ch, exchangeRate, valueLimitCurrency, "max");
+      const minValueRUB = cnyToRub(logisticsPriceRMB, exchangeRate);
+
+      let profitPriceRMB: number | undefined;
+      let reason: "profit-target" | "logistics-threshold" = "logistics-threshold";
+
+      if (input && commission) {
+        const reverseResult = reversePriceFromMargin(
+          targetMargin,
+          { ...input, targetPriceRMB: Math.max(input.targetPriceRMB || 0, logisticsPriceRMB, 100) },
+          commission,
+          ch
+        );
+
+        if (reverseResult.error || reverseResult.priceRMB <= 0) {
+          unfixableCount++;
+          continue;
+        }
+
+        profitPriceRMB = reverseResult.priceRMB;
+        reason = "profit-target";
+      }
+
+      const suggestedPriceRMB = Math.ceil(Math.max(logisticsPriceRMB, profitPriceRMB || 0));
+
+      if (maxPriceRMB !== undefined && suggestedPriceRMB > maxPriceRMB) {
+        unfixableCount++;
+        continue;
+      }
+
+      if (suggestedPriceRMB > 0) {
         fixableChannels.push({
           channelName: ch.name,
-          minValueRUB,
-          minPriceRMB,
+          minValueRUB: cnyToRub(suggestedPriceRMB, exchangeRate),
+          minPriceRMB: suggestedPriceRMB,
+          suggestedPriceRMB,
+          profitPriceRMB,
+          logisticsPriceRMB,
+          reason,
         });
       }
     } else if (hasOtherReason) {
@@ -1466,11 +1528,15 @@ export function calculateSuggestedPrice(
 
   const best = fixableChannels[0];
   return {
-    suggestedPriceRMB: best?.minPriceRMB || 0,
-    suggestedPriceRUB: best?.minValueRUB || 0,
+    suggestedPriceRMB: best?.suggestedPriceRMB || 0,
+    suggestedPriceRUB: best ? cnyToRub(best.suggestedPriceRMB, exchangeRate) : 0,
     channelName: best?.channelName || "",
     fixableChannels,
     unfixableChannelCount: unfixableCount,
     cannotFixByPrice: fixableChannels.length === 0 && unfixableCount > 0,
+    reason: best?.reason || "none",
+    targetMargin: best?.reason === "profit-target" ? targetMargin : null,
+    profitPriceRMB: best?.profitPriceRMB,
+    logisticsPriceRMB: best?.logisticsPriceRMB || 0,
   };
 }

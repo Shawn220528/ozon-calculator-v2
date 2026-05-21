@@ -36,6 +36,11 @@ const {
 } = loadTsModule(path.join("lib", "ozon-pricing.ts"));
 
 const {
+  calculateSuggestedPrice,
+  reversePriceFromMargin,
+} = loadTsModule(path.join("lib", "calculator.ts"));
+
+const {
   parseEuropeanNumber,
 } = loadTsModule(path.join("lib", "number-parsing.ts"));
 
@@ -147,6 +152,104 @@ assertEqual(parseEuropeanNumber("30,000.5"), 30000.5, "comma thousands with dot 
 assertEqual(parseEuropeanNumber("0,03432"), 0.03432, "comma decimal number");
 assertEqual(parseEuropeanNumber("2,6"), 2.6, "single comma decimal number");
 assertEqual(parseEuropeanNumber("30.5"), 30.5, "dot decimal number");
+
+const baseSuggestionInput = {
+  primaryCategory: "测试一级",
+  secondaryCategory: "测试二级",
+  length: 10,
+  width: 10,
+  height: 10,
+  weight: 100,
+  hasBattery: false,
+  hasLiquid: false,
+  designatedProviders: [],
+  purchaseCost: 30,
+  domesticShipping: 3,
+  packagingFee: 2,
+  returnRate: 0,
+  returnHandling: "destroy",
+  cpaEnabled: false,
+  cpaRate: 0,
+  cpcEnabled: false,
+  cpcBid: 0,
+  cpcConversionRate: 0,
+  targetPriceRMB: 0,
+  promotionDiscount: 0,
+  exchangeRate: 12,
+  withdrawalFee: 1.5,
+  exchangeRateBuffer: 0,
+  valueLimitCurrency: "RMB",
+  rivalPrice: 0,
+  rivalCurrency: "RMB",
+  multiItemCount: 1,
+  taxEnabled: false,
+  vatRate: 0,
+  corporateTaxRate: 0,
+};
+
+const baseSuggestionChannel = {
+  id: "suggestion-1",
+  name: "测试物流 Extra Small",
+  thirdParty: "TEST",
+  serviceTier: "Extra Small",
+  serviceLevel: "Express",
+  fixFee: 5,
+  varFeePerGram: 0.02,
+  pricePerKg: 25,
+  pricePerCubic: 0,
+  minWeight: 1,
+  maxWeight: 1000,
+  maxLength: 60,
+  maxWidth: 60,
+  maxHeight: 60,
+  maxSumDimension: 150,
+  deliveryTimeMin: 5,
+  deliveryTimeMax: 14,
+  deliveryTime: 10,
+  minValueRUB: 120,
+  maxValueRUB: 5000,
+  minValue: 10,
+  maxValue: 500,
+  billingType: "实际重量",
+  volumetricDivisor: 0,
+  ozonRating: 0,
+  batteryAllowed: true,
+  liquidAllowed: true,
+  reason: "货值不足",
+  interceptionReasons: [{ dimension: "货值", code: "VALUE_TOO_LOW", message: "货值不足" }],
+};
+
+const suggestionCommission = {
+  primaryCategory: "测试一级",
+  secondaryCategory: "测试二级",
+  tiers: [
+    { min: 0, max: 1500, rate: 10 },
+    { min: 1500.01, max: 5000, rate: 15 },
+    { min: 5000.01, max: Infinity, rate: 20 },
+  ],
+};
+
+const fallbackSuggestion = calculateSuggestedPrice([baseSuggestionChannel], 12, "RMB");
+assertEqual(fallbackSuggestion.suggestedPriceRMB, 10, "suggested price falls back to logistics threshold without commission");
+assertEqual(fallbackSuggestion.reason, "logistics-threshold", "fallback suggestion reason");
+
+const profitReverse = reversePriceFromMargin(20, { ...baseSuggestionInput, targetPriceRMB: 100 }, suggestionCommission, baseSuggestionChannel);
+const profitSuggestion = calculateSuggestedPrice([baseSuggestionChannel], 12, "RMB", baseSuggestionInput, suggestionCommission, 20);
+if (profitSuggestion.suggestedPriceRMB < Math.ceil(profitReverse.priceRMB)) {
+  throw new Error(`suggested price should satisfy 20% margin\nexpected >= ${Math.ceil(profitReverse.priceRMB)}\nactual   ${profitSuggestion.suggestedPriceRMB}`);
+}
+if (profitSuggestion.suggestedPriceRMB < fallbackSuggestion.suggestedPriceRMB) {
+  throw new Error("suggested price should not be below logistics threshold");
+}
+assertEqual(profitSuggestion.reason, "profit-target", "profit-aware suggestion reason");
+assertEqual(profitSuggestion.targetMargin, 20, "profit-aware suggestion target margin");
+
+const rubLimitSuggestion = calculateSuggestedPrice(
+  [{ ...baseSuggestionChannel, minValueRUB: 240, minValue: 5 }],
+  12,
+  "RUB"
+);
+assertEqual(rubLimitSuggestion.suggestedPriceRMB, 20, "RUB value-limit suggestion should use RUB threshold");
 
 assertDeepEqual(
   parseShippingRateString("¥3.12 + ¥0.0468/1 g"),

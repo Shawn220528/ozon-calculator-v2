@@ -79,9 +79,21 @@ interface InputPanelProps {
     suggestedPriceRMB: number;
     suggestedPriceRUB: number;
     channelName: string;
-    fixableChannels: Array<{ channelName: string; minValueRUB: number; minPriceRMB: number }>;
+    fixableChannels: Array<{
+      channelName: string;
+      minValueRUB: number;
+      minPriceRMB: number;
+      suggestedPriceRMB?: number;
+      profitPriceRMB?: number;
+      logisticsPriceRMB?: number;
+      reason?: "profit-target" | "logistics-threshold";
+    }>;
     unfixableChannelCount: number;
     cannotFixByPrice: boolean;
+    reason?: "profit-target" | "logistics-threshold" | "none";
+    targetMargin?: number | null;
+    profitPriceRMB?: number;
+    logisticsPriceRMB?: number;
   } | null;
   onCopyOzonPrice?: (label: string, value: string) => void;
 }
@@ -91,7 +103,7 @@ function Section({
   title,
   summary,
   icon,
-  defaultOpen = false,
+  defaultOpen = true,
   openSections,
   setOpenSections,
   children,
@@ -193,6 +205,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
   const selectedCategory = categories.find((c) => c.primary === input.primaryCategory);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     product: true,
+    cost: true,
+    ads: true,
     pricing: true,
   });
 
@@ -368,6 +382,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         icon={<Truck className="h-4 w-4" />}
         openSections={openSections}
         setOpenSections={setOpenSections}
+        defaultOpen
       >
         <div className="space-y-2">
           <div className="grid grid-cols-3 gap-2">
@@ -450,6 +465,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         icon={<Megaphone className="h-4 w-4" />}
         openSections={openSections}
         setOpenSections={setOpenSections}
+        defaultOpen
       >
         <div className="space-y-2">
           {/* CPA */}
@@ -647,8 +663,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         defaultOpen
       >
         <div className="space-y-2">
-          {/* 三向联动输入组：RMB / RUB / 利润率 */}
-          <div className="grid grid-cols-3 gap-2">
+          {/* 双向售价输入组：RMB / RUB */}
+          <div className="grid grid-cols-2 gap-2">
             {/* RMB 售价 */}
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">前台售价 (RMB)</Label>
@@ -671,26 +687,6 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   placeholder="0"
                 />
               </div>
-              {/* 💡 智能售价建议标签 */}
-              {suggestedPriceInfo && suggestedPriceInfo.suggestedPriceRMB > 0 && input.targetPriceRMB <= 0 && (
-                <div className="flex items-center gap-1 mt-1">
-                  <span className="text-[10px] text-amber-600">💡 建议</span>
-                  <button
-                    onClick={() => onInputChange({ ...input, targetPriceRMB: Math.ceil(suggestedPriceInfo.suggestedPriceRMB) })}
-                    className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded hover:bg-amber-100 border border-amber-200"
-                  >
-                    ¥{Math.ceil(suggestedPriceInfo.suggestedPriceRMB)}+
-                  </button>
-                  <span className="text-[9px] text-muted-foreground">
-                    (≈{Math.round(suggestedPriceInfo.suggestedPriceRUB).toLocaleString()}₽)
-                  </span>
-                  {suggestedPriceInfo.unfixableChannelCount > 0 && (
-                    <span className="text-[8px] text-orange-500">
-                      ({suggestedPriceInfo.unfixableChannelCount}个渠道不可修复)
-                    </span>
-                  )}
-                </div>
-              )}
             </div>
             {/* RUB 售价 */}
             <div className="space-y-1.5">
@@ -721,32 +717,89 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 />
               </div>
             </div>
-            {/* 目标利润率 */}
-            <div className="space-y-1.5">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={onToggleMarginLock}
-                      className={`flex items-center gap-1 text-xs font-medium transition-colors cursor-pointer select-none ${
-                        lockedMargin !== null ? "text-amber-600" : "text-slate-500 hover:text-slate-700"
-                      }`}
-                    >
-                      {lockedMargin !== null ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
-                      <span>目标利润率</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" sideOffset={8} className="max-w-xs z-[9999] bg-white border border-slate-200 shadow-lg p-3">
-                    <p className="text-xs text-slate-600">
-                      {lockedMargin !== null 
-                        ? "锁定中 — 更改成本时售价将自动调整以维持该利润率，点击解锁" 
-                        : "点击锁定利润率，锁定后更改成本将自动调整售价"}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              <div className="relative">
+          </div>
+
+          {suggestedPriceInfo && suggestedPriceInfo.suggestedPriceRMB > 0 && input.targetPriceRMB <= 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-amber-800">建议填入前台售价</div>
+                  <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span className="text-lg font-black tabular-nums text-amber-700">
+                      ¥{suggestedPriceInfo.suggestedPriceRMB}
+                    </span>
+                    <span className="text-[11px] font-medium text-amber-700">
+                      ≈ ₽{Math.round(suggestedPriceInfo.suggestedPriceRUB).toLocaleString()}
+                    </span>
+                    <span className="text-[11px] text-slate-600">
+                      匹配「{suggestedPriceInfo.channelName}」
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onInputChange({ ...input, targetPriceRMB: suggestedPriceInfo.suggestedPriceRMB })}
+                  className="h-8 shrink-0 rounded-md bg-amber-500 px-3 text-xs font-bold text-white transition-colors hover:bg-amber-600"
+                >
+                  填入
+                </button>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-slate-600">
+                {suggestedPriceInfo.targetMargin ? (
+                  <span className="rounded bg-white/70 px-1.5 py-0.5 text-amber-700">
+                    按 {suggestedPriceInfo.targetMargin}% 目标利润率计算
+                  </span>
+                ) : (
+                  <span className="rounded bg-white/70 px-1.5 py-0.5 text-amber-700">
+                    佣金缺失，按物流门槛价计算
+                  </span>
+                )}
+                {suggestedPriceInfo.logisticsPriceRMB !== undefined && suggestedPriceInfo.logisticsPriceRMB > 0 && (
+                  <span className="rounded bg-white/70 px-1.5 py-0.5">
+                    物流门槛 ¥{Math.ceil(suggestedPriceInfo.logisticsPriceRMB)}
+                  </span>
+                )}
+                {suggestedPriceInfo.profitPriceRMB !== undefined && suggestedPriceInfo.profitPriceRMB > 0 && (
+                  <span className="rounded bg-white/70 px-1.5 py-0.5">
+                    利润目标 ¥{Math.ceil(suggestedPriceInfo.profitPriceRMB)}
+                  </span>
+                )}
+                {suggestedPriceInfo.unfixableChannelCount > 0 && (
+                  <span className="rounded bg-white/70 px-1.5 py-0.5 text-orange-600">
+                    {suggestedPriceInfo.unfixableChannelCount} 个渠道调价仍不可修复
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 目标利润率 */}
+          <div className="space-y-1.5">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={onToggleMarginLock}
+                    className={`flex items-center gap-1 text-xs font-medium transition-colors cursor-pointer select-none ${
+                      lockedMargin !== null ? "text-amber-600" : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    {lockedMargin !== null ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+                    <span>目标利润率</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={8} className="max-w-xs z-[9999] bg-white border border-slate-200 shadow-lg p-3">
+                  <p className="text-xs text-slate-600">
+                    {lockedMargin !== null 
+                      ? "锁定中 — 更改成本时售价将自动调整以维持该利润率，点击解锁" 
+                      : "点击锁定利润率，锁定后更改成本将自动调整售价"}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <div className="flex items-center gap-1.5">
+              <div className="relative min-w-0 flex-1">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">%</span>
                 <Input
                   type="number"
@@ -776,12 +829,26 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   disabled={lockedMargin !== null}
                 />
               </div>
-              {marginError && (
-                <div className="text-[10px] text-red-600 font-medium p-1.5 rounded bg-red-50 border border-red-200">
-                  {marginError}
-                </div>
-              )}
+              <button
+                type="button"
+                disabled={lockedMargin !== null}
+                onClick={() => {
+                  if (lockedMargin !== null) return;
+                  setTargetMarginInput("20");
+                  isUpdatingFromMargin.current = true;
+                  onReversePriceFromMargin?.(20);
+                }}
+                className="h-8 w-11 shrink-0 rounded border border-indigo-200 bg-indigo-50 text-[10px] font-bold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="按 20% 目标利润率反推售价"
+              >
+                20%
+              </button>
             </div>
+            {marginError && (
+              <div className="text-[10px] text-red-600 font-medium p-1.5 rounded bg-red-50 border border-red-200">
+                {marginError}
+              </div>
+            )}
           </div>
           {ozonPricing.isValid && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">

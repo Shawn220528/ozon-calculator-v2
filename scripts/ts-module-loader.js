@@ -17,6 +17,7 @@ function loadTsModule(relativePath, fromDir = path.join(__dirname, "..")) {
       module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2020,
       esModuleInterop: true,
+      jsx: ts.JsxEmit.ReactJSX,
     },
   });
 
@@ -25,7 +26,12 @@ function loadTsModule(relativePath, fromDir = path.join(__dirname, "..")) {
 
   const localRequire = (request) => {
     if (request.startsWith(".")) {
-      const resolved = request.endsWith(".ts") ? request : `${request}.ts`;
+      let resolved = request;
+      if (!/\.(ts|tsx)$/.test(request)) {
+        resolved = fs.existsSync(path.resolve(path.dirname(sourcePath), `${request}.ts`))
+          ? `${request}.ts`
+          : `${request}.tsx`;
+      }
       return loadTsModule(resolved, path.dirname(sourcePath));
     }
     return require(request);

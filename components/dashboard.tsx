@@ -134,8 +134,8 @@ export function Dashboard({
   onCopyOzonPrice,
 }: DashboardProps) {
   const E = input.exchangeRate; // CNY/RUB (1 CNY = X RUB)
-  const [advisorExpanded, setAdvisorExpanded] = useState(false);
-  const [chartsExpanded, setChartsExpanded] = useState(false);
+  const [advisorExpanded, setAdvisorExpanded] = useState(true);
+  const [chartsExpanded, setChartsExpanded] = useState(true);
 
   // ====== 客户端渲染标记 ======
   const [isClient, setIsClient] = useState(false);

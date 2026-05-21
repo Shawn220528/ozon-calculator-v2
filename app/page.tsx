@@ -82,6 +82,38 @@ const DEFAULT_INPUT: CalculationInput = {
   corporateTaxRate: 25, // 企业所得税率 25%
 };
 
+const EMPTY_INPUT: CalculationInput = {
+  ...DEFAULT_INPUT,
+  length: 0,
+  width: 0,
+  height: 0,
+  weight: 0,
+  hasBattery: false,
+  hasLiquid: false,
+  designatedProviders: [],
+  purchaseCost: 0,
+  domesticShipping: 0,
+  packagingFee: 0,
+  returnRate: 0,
+  cpaEnabled: false,
+  cpaRate: 0,
+  cpcEnabled: false,
+  cpcBid: 0,
+  cpcConversionRate: 0,
+  targetPriceRMB: 0,
+  promotionDiscount: 0,
+  withdrawalFee: 0,
+  exchangeRateBuffer: 0,
+  valueLimitCurrency: "RMB",
+  rivalPrice: 0,
+  rivalCurrency: "RMB",
+  multiItemCount: 1,
+  profitWarningThreshold: 20,
+  taxEnabled: false,
+  vatRate: 0,
+  corporateTaxRate: 0,
+};
+
 // localStorage 键名
 const STORAGE_KEY = "ozon-calculator-input";
 const CONFIG_EXPORT_KEY = "ozon-calculator-config";
@@ -294,7 +326,7 @@ function importConfig(onSuccess: () => void, onError: (err: string) => void) {
 }
 
 export default function Home() {
-  const { getCommissionByCategory, getShippingChannels, commissionData, shippingData, commissionLoaded, shippingLoaded, clearCommissionData, clearShippingData, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig, lastImportSummary } = useDataHub();
+  const { getCommissionByCategory, getShippingChannels, commissionData, shippingData, commissionLoaded, shippingLoaded, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig, lastImportSummary } = useDataHub();
   const [input, setInput] = useState<CalculationInput>(DEFAULT_INPUT);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [marginError, setMarginError] = useState<string | null>(null);
@@ -517,8 +549,15 @@ export default function Home() {
       return null;
     }
     // 使用 input.exchangeRate (1 CNY = X RUB) 作为 RMB→RUB 转换因子
-    return calculateSuggestedPrice(shippingChannels.unavailable, effectiveRubPerCny, input.valueLimitCurrency);
-  }, [shippingChannels, input.targetPriceRMB, input.weight, effectiveRubPerCny, input.valueLimitCurrency]);
+    return calculateSuggestedPrice(
+      shippingChannels.unavailable,
+      effectiveRubPerCny,
+      input.valueLimitCurrency,
+      { ...input, exchangeRate: effectiveRubPerCny },
+      commission,
+      20
+    );
+  }, [shippingChannels, input, commission, effectiveRubPerCny]);
 
   // 🔹 推荐物流排序：按费用/时效/评分排序（定义在 channelCosts 之后，见下方）
 
@@ -729,62 +768,43 @@ export default function Home() {
     });
   }, [result.profitMargin]);
 
-  // 🔹 一键重置功能（彻底化：清除所有状态）
-  // 🔹 全局重置函数：物理+逻辑+存储三重重置
+  // 🔹 一键重置输入：只清空计算输入，不清空已导入的数据表
   const handleReset = useCallback(() => {
     const confirmed = window.confirm(
-      "⚠️ 确定要重置所有数据吗？\n\n" +
+      "⚠️ 确定要清空当前计算输入吗？\n\n" +
       "此操作将：\n" +
-      "• 清空所有输入参数（尺寸、重量、成本等）\n" +
+      "• 清空尺寸、重量、成本、售价、广告、税务等输入\n" +
       "• 清除临时物流选择\n" +
-      "• 清除所有缓存数据\n\n" +
-      "此操作不可撤销！"
+      "• 清除利润率锁定、批量结果和已关闭提示\n\n" +
+      "已导入的佣金表和物流表会保留。"
     );
     
     if (!confirmed) return;
     
-    // ===== 1. 全局状态清空 =====
-    setInput(DEFAULT_INPUT);
+    const nextExchangeRate = Number.isFinite(input.exchangeRate) && input.exchangeRate > 0
+      ? input.exchangeRate
+      : DEFAULT_INPUT.exchangeRate;
+
+    setInput({
+      ...EMPTY_INPUT,
+      exchangeRate: nextExchangeRate,
+    });
     setSelectedChannelId(null);
     setMarginError(null);
     setLockedMargin(null);
-    
-    // ===== 2. 持久化存储清理 =====
-    
-    // 清除输入数据
+    setBatchResults([]);
+    setBatchError(null);
+    setIsBatchCalculating(false);
+    setShowAllAvailable(false);
+    setShowAllUnavailable(false);
+    setDismissedAlertIds(new Set());
+
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem("ozon-locked-channel");
     localStorage.removeItem("ozon-locked-margin");
-    
-    // 清除数据中心缓存
-    localStorage.removeItem("ozon_commission_data");
-    localStorage.removeItem("ozon_shipping_data");
-    localStorage.removeItem("ozon_commission_mappings");
-    localStorage.removeItem("ozon_shipping_mappings");
-    localStorage.removeItem("ozon_column_mapping");
-    
-    // 清除汇率缓存
-    localStorage.removeItem("ozon_exchange_rate");
-    localStorage.removeItem("ozon_withdrawal_fee");
-    
-    // 清除数据版本标记
-    localStorage.removeItem("ozon_data_version");
-    
-    // ===== 3. 逻辑干预撤销 =====
-    
-    // 清除上传的佣金和物流数据
-    if (clearCommissionData) clearCommissionData();
-    if (clearShippingData) clearShippingData();
-    
-    // ===== 4. UI 刷新与防御 =====
-    
-    // 显示成功提示
-    alert("✅ 重置成功！系统已恢复至初始状态。");
-    
-    // 强制刷新页面（确保所有组件重新挂载）
-    window.location.reload();
-    
-  }, [clearCommissionData, clearShippingData]);
+
+    setUploadToast({ message: "✅ 已清空计算输入，导入数据已保留", type: "success" });
+  }, [input.exchangeRate]);
 
   // 🔹 佣金表上传处理
   const handleCommissionFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -908,7 +928,7 @@ export default function Home() {
         );
         const selected = rowChannels.available[0] || null;
         if (!selected) {
-          const suggestedPrice = calculateSuggestedPrice(rowChannels.unavailable, effectiveRubPerCny, rowInput.valueLimitCurrency);
+          const suggestedPrice = calculateSuggestedPrice(rowChannels.unavailable, effectiveRubPerCny, rowInput.valueLimitCurrency, rowInput, rowCommission, 20);
           return {
             rowIndex: index + 2,
             sku: row.sku,
@@ -1228,8 +1248,11 @@ export default function Home() {
         severity: "warning",
         label: (
           <>
-            建议售价 <strong>¥{Math.ceil(priceSuggestion.suggestedPriceRMB)}</strong>
-            <span className="ml-1">(≈{Math.round(priceSuggestion.suggestedPriceRUB).toLocaleString()}₽) 可匹配「{priceSuggestion.channelName}」</span>
+            建议售价 <strong>¥{priceSuggestion.suggestedPriceRMB}</strong>
+            <span className="ml-1">
+              (≈{Math.round(priceSuggestion.suggestedPriceRUB).toLocaleString()}₽)
+              {priceSuggestion.targetMargin ? ` 可达 ${priceSuggestion.targetMargin}% 并匹配「${priceSuggestion.channelName}」` : ` 可匹配「${priceSuggestion.channelName}」`}
+            </span>
             {priceSuggestion.unfixableChannelCount > 0 && (
               <span className="ml-1 text-[10px] opacity-80">(另有{priceSuggestion.unfixableChannelCount}个渠道调价无法修复)</span>
             )}
@@ -1240,7 +1263,7 @@ export default function Home() {
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              setInput(prev => ({ ...prev, targetPriceRMB: Math.ceil(priceSuggestion.suggestedPriceRMB) }));
+              setInput(prev => ({ ...prev, targetPriceRMB: priceSuggestion.suggestedPriceRMB }));
             }}
             className="ml-1 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-amber-600"
           >
@@ -1826,7 +1849,14 @@ export default function Home() {
                   {/* 如果填写了尺寸重量但没有售价 - 显示价格建议 */}
                   {/* 🔴 智能售价建议：区分可修复/不可修复渠道 */}
                   {input.length > 0 && input.width > 0 && input.height > 0 && input.weight > 0 && input.targetPriceRMB <= 0 && shippingChannels.unavailable.length > 0 && (() => {
-                    const suggestion = calculateSuggestedPrice(shippingChannels.unavailable, effectiveRubPerCny, input.valueLimitCurrency);
+                    const suggestion = priceSuggestion || calculateSuggestedPrice(
+                      shippingChannels.unavailable,
+                      effectiveRubPerCny,
+                      input.valueLimitCurrency,
+                      { ...input, exchangeRate: effectiveRubPerCny },
+                      commission,
+                      20
+                    );
                     if (suggestion.fixableChannels.length > 0) {
                       return (
                         <div className="bg-amber-50 p-2 rounded mb-2">
@@ -1835,7 +1865,7 @@ export default function Home() {
                             <div key={idx} className="flex justify-between items-center text-[10px] mb-1">
                               <span className="text-slate-600">{opt.channelName}</span>
                               <span className="font-semibold text-amber-700">
-                                ≥ ¥{Math.ceil(opt.minPriceRMB)} (≈{Math.round(opt.minValueRUB).toLocaleString()}₽)
+                                ≥ ¥{opt.suggestedPriceRMB} (≈{Math.round(opt.minValueRUB).toLocaleString()}₽)
                               </span>
                             </div>
                           ))}
