@@ -22,7 +22,8 @@ import {
 } from "./logistics-parsing";
 import {
   normalizeCommissionCategory,
-  parseCommissionRows,
+  parseCommissionWorkbookRows,
+  selectCommissionSheetName,
 } from "./commission-parsing";
 import { parseAlternativeShippingRows } from "./shipping-alternative-parsing";
 import { isSkippableShippingRow, selectShippingSheetName } from "./shipping-workbook";
@@ -34,6 +35,10 @@ const TIER_BOUNDARIES = [
   { min: 1500.01, max: 5000 },
   { min: 5000.01, max: Infinity },
 ] as const;
+
+function countCommissionTiers(data: CategoryCommission[], mode: "RFBS" | "FBP"): number {
+  return data.reduce((sum, item) => sum + (item.modeTiers?.[mode] || item.tiers).length, 0);
+}
 
 // 列映射配置类型
 export interface ColumnMapping {
@@ -55,8 +60,8 @@ interface DataHubContextType {
   clearShippingData: () => void;
   updateColumnMapping: (type: "commission" | "shipping", mapping: Record<string, number>) => void;
   updateInterceptionConfig: (config: Record<string, boolean>) => void;
-  getCategories: () => { primary: string; secondary: string[] }[];
-  getCommissionByCategory: (primary: string, secondary: string) => CategoryCommission | undefined;
+  getCategories: () => { primary: string; secondary: { name: string; tertiary: string[] }[] }[];
+  getCommissionByCategory: (primary: string, secondary: string, tertiary?: string) => CategoryCommission | undefined;
   getShippingChannels: (
     length: number,
     width: number,
@@ -423,8 +428,8 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
     return new Promise<ImportSummary>((resolve, reject) => {
       const ext = file.name.split(".").pop()?.toLowerCase();
 
-      const parseRows = (rawRows: string[][]) => {
-        return parseCommissionRows(rawRows, mappingOverride);
+      const parseRows = (rawRows: string[][], sheetName?: string) => {
+        return parseCommissionWorkbookRows(rawRows, sheetName, mappingOverride);
       };
 
       if (ext === "csv") {
@@ -442,7 +447,11 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
                 type: "commission",
                 rows: rawRows.length,
                 categories: parsed.length,
-                commissionTierMapped: parsed.reduce((sum, item) => sum + item.tiers.length, 0),
+                commissionTierMapped: countCommissionTiers(parsed, "RFBS") + countCommissionTiers(parsed, "FBP"),
+                commissionModeMapped: {
+                  RFBS: countCommissionTiers(parsed, "RFBS"),
+                  FBP: countCommissionTiers(parsed, "FBP"),
+                },
               };
               setLastImportSummary(summary);
               resolve(summary);
@@ -458,10 +467,13 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
           try {
             const data = new Uint8Array(e.target?.result as ArrayBuffer);
             const workbook = XLSX.read(data, { type: "array" });
-            const firstSheetName = workbook.SheetNames[0];
+            const firstSheetName = selectCommissionSheetName(workbook.SheetNames);
+            if (!firstSheetName) {
+              throw new Error("未找到可解析的佣金工作表");
+            }
             const worksheet = workbook.Sheets[firstSheetName];
             const rawRows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: "", raw: false });
-            const parsed = parseRows(rawRows);
+            const parsed = parseRows(rawRows, firstSheetName);
             setCommissionData(parsed);
             setCommissionLoaded(true);
             safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
@@ -469,7 +481,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               type: "commission",
               rows: rawRows.length,
               categories: parsed.length,
-              commissionTierMapped: parsed.reduce((sum, item) => sum + item.tiers.length, 0),
+              commissionSheetName: firstSheetName,
+              commissionTierMapped: countCommissionTiers(parsed, "RFBS") + countCommissionTiers(parsed, "FBP"),
+              commissionModeMapped: {
+                RFBS: countCommissionTiers(parsed, "RFBS"),
+                FBP: countCommissionTiers(parsed, "FBP"),
+              },
             };
             setLastImportSummary(summary);
             resolve(summary);
@@ -757,24 +774,51 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const getCategories = useCallback(() => {
-    const map = new Map<string, string[]>();
+    const map = new Map<string, Map<string, Set<string>>>();
     commissionData.forEach((item) => {
       if (!map.has(item.primaryCategory)) {
-        map.set(item.primaryCategory, []);
+        map.set(item.primaryCategory, new Map());
       }
-      map.get(item.primaryCategory)!.push(item.secondaryCategory);
+      const secondaryMap = map.get(item.primaryCategory)!;
+      if (!secondaryMap.has(item.secondaryCategory)) {
+        secondaryMap.set(item.secondaryCategory, new Set());
+      }
+      if (item.tertiaryCategory) {
+        secondaryMap.get(item.secondaryCategory)!.add(item.tertiaryCategory);
+      }
     });
-    return Array.from(map.entries()).map(([primary, secondary]) => ({ primary, secondary }));
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a.localeCompare(b, "zh-CN"))
+      .map(([primary, secondaryMap]) => ({
+        primary,
+        secondary: Array.from(secondaryMap.entries())
+          .sort(([a], [b]) => a.localeCompare(b, "zh-CN"))
+          .map(([name, tertiarySet]) => ({
+            name,
+            tertiary: Array.from(tertiarySet).sort((a, b) => a.localeCompare(b, "zh-CN")),
+          })),
+      }));
   }, [commissionData]);
 
   const getCommissionByCategory = useCallback(
-    (primary: string, secondary: string) => {
+    (primary: string, secondary: string, tertiary?: string) => {
       const normalizedPrimary = normalizeCommissionCategory(primary);
       const normalizedSecondary = normalizeCommissionCategory(secondary);
+      const normalizedTertiary = tertiary ? normalizeCommissionCategory(tertiary) : "";
+      if (normalizedTertiary) {
+        const exact = commissionData.find(
+          (item) =>
+            normalizeCommissionCategory(item.primaryCategory) === normalizedPrimary &&
+            normalizeCommissionCategory(item.secondaryCategory) === normalizedSecondary &&
+            normalizeCommissionCategory(item.tertiaryCategory || "") === normalizedTertiary
+        );
+        if (exact) return exact;
+      }
       return commissionData.find(
         (item) =>
           normalizeCommissionCategory(item.primaryCategory) === normalizedPrimary &&
-          normalizeCommissionCategory(item.secondaryCategory) === normalizedSecondary
+          normalizeCommissionCategory(item.secondaryCategory) === normalizedSecondary &&
+          (!tertiary || !item.tertiaryCategory)
       );
     },
     [commissionData]

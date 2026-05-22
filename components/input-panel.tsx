@@ -195,14 +195,20 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     onInputChange({ ...input, [key]: value });
   };
 
-  // 当一级类目改变时，重置二级类目
   const handlePrimaryCategoryChange = (primary: string) => {
     const cat = categories.find((c) => c.primary === primary);
-    const secondary = cat?.secondary[0] || "";
-    onInputChange({ ...input, primaryCategory: primary, secondaryCategory: secondary });
+    const secondary = cat?.secondary[0]?.name || "";
+    const tertiary = cat?.secondary[0]?.tertiary[0] || "";
+    onInputChange({ ...input, primaryCategory: primary, secondaryCategory: secondary, tertiaryCategory: tertiary });
   };
 
   const selectedCategory = categories.find((c) => c.primary === input.primaryCategory);
+  const selectedSecondaryCategory = selectedCategory?.secondary.find((sec) => sec.name === input.secondaryCategory);
+  const showTertiaryCategory = (selectedSecondaryCategory?.tertiary.length || 0) > 0;
+  const handleSecondaryCategoryChange = (secondary: string) => {
+    const sec = selectedCategory?.secondary.find((item) => item.name === secondary);
+    onInputChange({ ...input, secondaryCategory: secondary, tertiaryCategory: sec?.tertiary[0] || "" });
+  };
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     product: true,
     cost: true,
@@ -233,7 +239,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         defaultOpen
       >
         <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2">
+          <div className={`grid gap-2 ${showTertiaryCategory ? "grid-cols-1 xl:grid-cols-3" : "grid-cols-2"}`}>
             <div className="space-y-1.5">
               <Label className="text-xs">一级类目</Label>
               <Select value={input.primaryCategory} onValueChange={handlePrimaryCategoryChange}>
@@ -253,20 +259,40 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               <Label className="text-xs">二级类目</Label>
               <Select
                 value={input.secondaryCategory}
-                onValueChange={(v) => updateField("secondaryCategory", v)}
+                onValueChange={handleSecondaryCategoryChange}
               >
                 <SelectTrigger className="h-8 text-sm">
                   <SelectValue placeholder="选择二级类目" />
                 </SelectTrigger>
                 <SelectContent>
                   {selectedCategory?.secondary.map((sec) => (
-                    <SelectItem key={sec} value={sec}>
-                      {sec}
+                    <SelectItem key={sec.name} value={sec.name}>
+                      {sec.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+            {showTertiaryCategory && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">三级类目</Label>
+                <Select
+                  value={input.tertiaryCategory || selectedSecondaryCategory?.tertiary[0] || ""}
+                  onValueChange={(v) => updateField("tertiaryCategory", v)}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="选择三级类目" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectedSecondaryCategory?.tertiary.map((ter) => (
+                      <SelectItem key={ter} value={ter}>
+                        {ter}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-2">

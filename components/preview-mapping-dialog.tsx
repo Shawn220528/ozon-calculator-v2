@@ -60,6 +60,7 @@ export function PreviewMappingDialog({
     const labels: Record<string, string> = {
       primaryCategory: "一级类目",
       secondaryCategory: "二级类目",
+      tertiaryCategory: "三级类目（可选）",
       tier1Rate: "阶梯1 (0-1500 RUB)",
       tier2Rate: "阶梯2 (1500-5000 RUB)",
       tier3Rate: "阶梯3 (5000+ RUB)",

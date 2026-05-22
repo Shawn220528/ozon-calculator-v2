@@ -12,7 +12,9 @@ const XLSX = require("xlsx");
 const { loadTsModule } = require("./ts-module-loader");
 
 const {
+  parseCommissionWorkbookRows,
   parseCommissionRows,
+  selectCommissionSheetName,
 } = loadTsModule(path.join("lib", "commission-parsing.ts"));
 const {
   normalizeLimitValue,
@@ -71,6 +73,30 @@ function readWorkbookRows(filePath) {
   return {
     sheetName,
     rows: XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "", raw: false }),
+  };
+}
+
+function readCommissionRows(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".xlsx" || ext === ".xls") {
+    const workbook = XLSX.readFile(filePath, { cellDates: false });
+    const sheetName = selectCommissionSheetName(workbook.SheetNames);
+    if (!sheetName) {
+      throw new Error("未找到可解析的佣金工作表");
+    }
+    const worksheet = workbook.Sheets[sheetName];
+    return {
+      sheetName,
+      commissions: parseCommissionWorkbookRows(
+        XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "", raw: false }),
+        sheetName
+      ),
+    };
+  }
+
+  return {
+    sheetName: undefined,
+    commissions: parseCommissionRows(parseCsvRows(fs.readFileSync(filePath, "utf8"), "佣金表")),
   };
 }
 
@@ -274,8 +300,10 @@ async function main() {
     console.log("读取佣金数据:", args.commission);
     console.log("读取物流数据:", args.shipping);
 
-    const commissionCSV = fs.readFileSync(args.commission, "utf8");
-    const commissions = parseCommissionRows(parseCsvRows(commissionCSV, "佣金表"));
+    const { sheetName: commissionSheetName, commissions } = readCommissionRows(args.commission);
+    if (commissionSheetName) {
+      console.log("佣金工作表:", commissionSheetName);
+    }
     const shippingExt = path.extname(args.shipping).toLowerCase();
     const channels =
       shippingExt === ".xlsx" || shippingExt === ".xls"

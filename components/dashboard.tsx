@@ -34,9 +34,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Slider } from "@/components/ui/slider";
-import { CalculationResult, CalculationInput, ShippingChannel } from "@/lib/types";
+import { CategoryCommission, CalculationResult, CalculationInput, ShippingChannel } from "@/lib/types";
 import { calculateShippingCost } from "@/lib/data-hub-context";
-import { calculateExchangeRateStressTest, getCommissionRate, calculateMarginalContribution, calculateNetProfit, detectShippingDimensionLimits } from "@/lib/calculator";
+import { calculateExchangeRateStressTest, getCommissionRate, getCommissionTiersForMode, calculateMarginalContribution, calculateNetProfit, detectShippingDimensionLimits } from "@/lib/calculator";
 import { cnyToRub, rubToCny } from "@/lib/currency";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
 import {
@@ -92,11 +92,7 @@ interface DashboardProps {
     error?: string;
   }>;
   // 用于汇率抗压滑块计算
-  commission?: {
-    primaryCategory: string;
-    secondaryCategory: string;
-    tiers: Array<{ min: number; max: number; rate: number }>;
-  };
+  commission?: CategoryCommission;
   onCopyOzonPrice?: (label: string, value: string) => void;
 }
 
@@ -176,7 +172,7 @@ export function Dashboard({
     const priceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
     
     // 获取新汇率下的佣金率
-    const commissionRate = getCommissionRate(commission, priceRUB);
+    const commissionRate = getCommissionRate(commission, priceRUB, input.fulfillmentMode || "RFBS");
     
     // 计算边际贡献率
     const cpaRateForM = input.cpaEnabled ? input.cpaRate : 0;
@@ -193,6 +189,9 @@ export function Dashboard({
   // ====== 搜索与筛选状态 ======
   const [searchTerm, setSearchTerm] = useState("");
   const [filterServiceLevel, setFilterServiceLevel] = useState<string>("all");
+  const activeCommissionTiers = commission ? getCommissionTiersForMode(commission, input.fulfillmentMode || "RFBS") : [];
+  const inactiveCommissionMode = (input.fulfillmentMode || "RFBS") === "RFBS" ? "FBP" : "RFBS";
+  const inactiveCommissionTiers = commission ? getCommissionTiersForMode(commission, inactiveCommissionMode) : [];
 
   // 提取所有唯一的服务等级
   const allServiceLevels = useMemo(() => {
@@ -514,8 +513,8 @@ export function Dashboard({
                       className="max-w-xs z-[9999] bg-white border border-slate-200 shadow-lg p-3"
                     >
                       <div className="space-y-1 text-xs">
-                        <p className="font-semibold">佣金阶梯费率</p>
-                        {commission.tiers.map((tier, i) => {
+                        <p className="font-semibold">{input.fulfillmentMode || "RFBS"} 佣金阶梯费率</p>
+                        {activeCommissionTiers.map((tier, i) => {
                           const isMatched = result.commissionRate === tier.rate;
                           return (
                             <div key={i} className={`flex justify-between gap-4 ${isMatched ? 'text-blue-700 font-bold' : 'text-muted-foreground'}`}>
@@ -524,6 +523,17 @@ export function Dashboard({
                             </div>
                           );
                         })}
+                        {inactiveCommissionTiers.length > 0 && (
+                          <div className="mt-2 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
+                            <p className="mb-1 font-medium">{inactiveCommissionMode} 对比</p>
+                            {inactiveCommissionTiers.map((tier, i) => (
+                              <div key={`${inactiveCommissionMode}-${i}`} className="flex justify-between gap-4">
+                                <span>{tier.min}-{tier.max === Infinity ? '∞' : tier.max} RUB</span>
+                                <span>{tier.rate}%</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </TooltipContent>
                   </Tooltip>

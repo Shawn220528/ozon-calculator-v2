@@ -65,6 +65,7 @@ export function parseBatchInput(csvContent: string): BatchParseResult {
       else if (key.includes("售价")) row.targetPriceRMB = parseNumeric(value);
       else if (key.includes("一级")) row.primaryCategory = value;
       else if (key.includes("二级")) row.secondaryCategory = value;
+      else if (key.includes("三级")) row.tertiaryCategory = value;
     });
 
     const missingCore: string[] = [];

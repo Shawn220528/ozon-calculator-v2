@@ -1,5 +1,7 @@
 import type { ValueLimitCurrency } from "./currency";
 
+export type FulfillmentMode = "RFBS" | "FBP";
+
 // 佣金阶梯定义
 export interface CommissionTier {
   min: number; // 最小金额（RUB）
@@ -11,7 +13,20 @@ export interface CommissionTier {
 export interface CategoryCommission {
   primaryCategory: string;
   secondaryCategory: string;
+  tertiaryCategory?: string;
+  categoryPath?: string[];
   tiers: CommissionTier[]; // 通常有3个阶梯
+  modeTiers?: Partial<Record<FulfillmentMode, CommissionTier[]>>;
+  sourceMeta?: {
+    sheetName?: string;
+    rowNumber?: number;
+    marketplaceCategory?: string;
+    descriptiveCategory?: string;
+    descriptiveType?: string;
+    brand?: string;
+    rfbsRates?: number[];
+    fbpRates?: number[];
+  };
 }
 
 // 物流渠道定义
@@ -64,6 +79,7 @@ export interface CalculationInput {
   // 商品参数
   primaryCategory: string;
   secondaryCategory: string;
+  tertiaryCategory?: string;
   length: number; // cm
   width: number; // cm
   height: number; // cm
@@ -100,6 +116,7 @@ export interface CalculationInput {
   paymentFee: number; // 支付手续费百分比
   exchangeRateBuffer: number; // 汇率安全缓冲百分比（默认0，用于规避结汇风险）
   valueLimitCurrency: ValueLimitCurrency; // 物流货值限制口径
+  fulfillmentMode: FulfillmentMode; // 经营模式：RFBS/FBP
   
 // 经营模拟
   rivalPrice?: number; // 竞品售价
@@ -207,6 +224,8 @@ export interface ImportSummary {
   channels?: number;
   categories?: number;
   commissionTierMapped?: number;
+  commissionSheetName?: string;
+  commissionModeMapped?: Partial<Record<FulfillmentMode, number>>;
   valueRMBMapped?: number;
   valueRUBMapped?: number;
   deliveryTimeMapped?: number;

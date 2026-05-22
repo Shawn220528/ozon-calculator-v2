@@ -14,7 +14,9 @@ const {
 const {
   findCommissionColumns,
   parseCommissionPercent,
+  parseCommissionWorkbookRows,
   parseCommissionRows,
+  selectCommissionSheetName,
 } = loadTsModule(path.join("lib", "commission-parsing.ts"));
 
 const {
@@ -193,6 +195,7 @@ const baseSuggestionInput = {
   paymentFee: 1,
   exchangeRateBuffer: 0,
   valueLimitCurrency: "RMB",
+  fulfillmentMode: "RFBS",
   rivalPrice: 0,
   rivalCurrency: "RMB",
   multiItemCount: 1,
@@ -298,6 +301,29 @@ const cpcSalesPercentResult = performFullCalculation(
 assertApproxEqual(cpcSalesPercentResult.costs.cpcCost, 14, "full calculation uses CPC sales percent cost");
 assertApproxEqual(cpcSalesPercentResult.adRiskControl.currentACOS, 10, "ACOS includes CPC sales percent and CPA");
 
+const modeCommission = {
+  ...suggestionCommission,
+  modeTiers: {
+    RFBS: [
+      { min: 0, max: 1500, rate: 12 },
+      { min: 1500.01, max: 5000, rate: 14 },
+      { min: 5000.01, max: Infinity, rate: 18 },
+    ],
+    FBP: [
+      { min: 0, max: 1500, rate: 6 },
+      { min: 1500.01, max: 5000, rate: 7 },
+      { min: 5000.01, max: Infinity, rate: 8 },
+    ],
+  },
+};
+const rfbsModeResult = performFullCalculation({ ...baseSuggestionInput, targetPriceRMB: 100, fulfillmentMode: "RFBS" }, modeCommission, baseSuggestionChannel);
+const fbpModeResult = performFullCalculation({ ...baseSuggestionInput, targetPriceRMB: 100, fulfillmentMode: "FBP" }, modeCommission, baseSuggestionChannel);
+assertEqual(rfbsModeResult.commissionRate, 12, "RFBS mode should use RFBS commission tiers");
+assertEqual(fbpModeResult.commissionRate, 6, "FBP mode should use FBP commission tiers");
+if (fbpModeResult.netProfit <= rfbsModeResult.netProfit) {
+  throw new Error("FBP lower commission should improve net profit in mode regression");
+}
+
 assertDeepEqual(
   parseShippingRateString("¥3.12 + ¥0.0468/1 g"),
   { fixFee: 3.12, varFeePerGram: 0.0468 },
@@ -333,14 +359,72 @@ assertDeepEqual(
   {
     primaryCategory: "测试一级",
     secondaryCategory: "测试二级",
+    categoryPath: ["测试一级", "测试二级"],
     tiers: [
       { min: 0, max: 1500, rate: 11 },
       { min: 1500.01, max: 5000, rate: 14 },
       { min: 5000.01, max: null, rate: 21 },
     ],
+    modeTiers: {
+      RFBS: [
+        { min: 0, max: 1500, rate: 11 },
+        { min: 1500.01, max: 5000, rate: 14 },
+        { min: 5000.01, max: null, rate: 21 },
+      ],
+      FBP: [
+        { min: 0, max: 1500, rate: 11 },
+        { min: 1500.01, max: 5000, rate: 14 },
+        { min: 5000.01, max: null, rate: 21 },
+      ],
+    },
   },
   "commission template parsing"
 );
+
+const officialCommissionPath = "E:\\Download\\Microsoft Edgedownload\\Tarifs_CN_01_12_2025_1761720496 (1).xlsx";
+if (fs.existsSync(officialCommissionPath)) {
+  const officialWorkbook = XLSX.readFile(officialCommissionPath, { raw: false, cellDates: false });
+  const officialSheetName = selectCommissionSheetName(officialWorkbook.SheetNames);
+  assertEqual(officialSheetName, "Full ChinaHK", "official tarifs workbook sheet selection");
+  const officialRows = XLSX.utils.sheet_to_json(officialWorkbook.Sheets[officialSheetName], { header: 1, defval: "", raw: false, blankrows: false });
+  const officialCommissions = parseCommissionWorkbookRows(officialRows, officialSheetName);
+  if (officialCommissions.length < 10000) {
+    throw new Error(`official tarifs parser should return detailed rows\nexpected >= 10000\nactual   ${officialCommissions.length}`);
+  }
+  const biopsyPunch = officialCommissions.find((item) =>
+    item.primaryCategory === "药店" &&
+    item.secondaryCategory === "医疗器械" &&
+    (item.tertiaryCategory || "").includes("穿孔活检工具")
+  );
+  if (!biopsyPunch) {
+    throw new Error("official tarifs parser should include 药店 / 医疗器械 / 穿孔活检工具");
+  }
+  assertDeepEqual(
+    biopsyPunch.categoryPath,
+    ["药店", "医疗器械", biopsyPunch.tertiaryCategory],
+    "official tarifs category path"
+  );
+  assertDeepEqual(
+    biopsyPunch.modeTiers.RFBS.map((tier) => tier.rate),
+    [12, 14, 18],
+    "official tarifs RFBS rates"
+  );
+  assertDeepEqual(
+    biopsyPunch.modeTiers.FBP.map((tier) => tier.rate),
+    [11, 13, 17],
+    "official tarifs FBP rates"
+  );
+  if (!officialCommissions.some((item) => item.sourceMeta?.brand === "Apple")) {
+    throw new Error("official tarifs parser should preserve Apple brand rows");
+  }
+  const primaryNames = officialCommissions.map((item) => item.primaryCategory);
+  if (primaryNames.some((name) => !name)) {
+    throw new Error("official tarifs parser should not emit empty primary categories");
+  }
+  if (!officialCommissions.some((item) => item.tertiaryCategory && item.categoryPath?.length === 3)) {
+    throw new Error("official tarifs parser should emit third-level categories");
+  }
+}
 
 const batchCsv = [
   "SKU,一级类目,二级类目,长度,宽度,高度,重量,采购成本,前台售价",

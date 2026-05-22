@@ -219,6 +219,10 @@ const COMMISSION_SYNONYMS: SynonymBank = {
     "二级类目", "子类目", "细分类目", "二级类别", "子类别",
     "secondary category", "sub category", "subcategory"
   ],
+  tertiaryCategory: [
+    "三级类目", "三级类别", "商品类型", "商品类目",
+    "tertiary category", "third category", "descriptive type", "descriptivetype"
+  ],
   tier1Rate: [
     "佣金率(0-1500卢布)", "佣金率 0-1500", "0-1500卢布",
     "rfbs -> 0 - 1500 -> тариф, %", "rfbs 0-1500", "0-1500",

@@ -47,11 +47,13 @@ import {
 } from "@/lib/template-export";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
 import { selectShippingSheetName } from "@/lib/shipping-workbook";
+import { selectCommissionSheetName } from "@/lib/commission-parsing";
 
 // 默认输入：售价为 RMB（1500 RUB ÷ 12 = 125 RMB）
 const DEFAULT_INPUT: CalculationInput = {
   primaryCategory: "电子产品",
   secondaryCategory: "电子产品配饰",
+  tertiaryCategory: "",
   length: 20,
   width: 15,
   height: 10,
@@ -78,6 +80,7 @@ const DEFAULT_INPUT: CalculationInput = {
   paymentFee: 1,
   exchangeRateBuffer: 0, // 汇率安全缓冲：默认0%
   valueLimitCurrency: "RMB",
+  fulfillmentMode: "RFBS",
   rivalPrice: 0, // 竞品售价
   rivalCurrency: 'RMB' as const, // 竞品售价货币模式
   multiItemCount: 1, // 单单购买数量
@@ -112,6 +115,7 @@ const EMPTY_INPUT: CalculationInput = {
   paymentFee: 1,
   exchangeRateBuffer: 0,
   valueLimitCurrency: "RMB",
+  fulfillmentMode: "RFBS",
   rivalPrice: 0,
   rivalCurrency: "RMB",
   multiItemCount: 1,
@@ -196,7 +200,9 @@ async function readTabularFileAsCsv(file: File, type?: "commission" | "shipping"
     const workbook = XLSX.read(buffer, { type: "array" });
     const sheetName = type === "shipping"
       ? selectShippingSheetName(workbook.SheetNames)
-      : workbook.SheetNames[0];
+      : type === "commission"
+        ? selectCommissionSheetName(workbook.SheetNames)
+        : workbook.SheetNames[0];
     if (!sheetName) {
       throw new Error("未找到可解析的工作表");
     }
@@ -455,6 +461,8 @@ export default function Home() {
           cpcBillingMode: parsedData.cpcBillingMode || "bidCvr",
           cpcSalesPercent: parsedData.cpcSalesPercent || 0,
           valueLimitCurrency: parsedData.valueLimitCurrency || "RMB",
+          fulfillmentMode: parsedData.fulfillmentMode || "RFBS",
+          tertiaryCategory: parsedData.tertiaryCategory || "",
         });
       }
       
@@ -507,8 +515,8 @@ export default function Home() {
 
   // 获取当前类目的佣金配置
   const commission = useMemo(
-    () => getCommissionByCategory(input.primaryCategory, input.secondaryCategory),
-    [input.primaryCategory, input.secondaryCategory]
+    () => getCommissionByCategory(input.primaryCategory, input.secondaryCategory, input.tertiaryCategory),
+    [input.primaryCategory, input.secondaryCategory, input.tertiaryCategory, getCommissionByCategory]
   );
 
   // 🔹 计算实际汇率（扣除安全缓冲），单位固定为 1 CNY = X RUB
@@ -661,6 +669,7 @@ export default function Home() {
     effectiveInput.exchangeRate,
     effectiveInput.withdrawalFee,
     effectiveInput.paymentFee,
+    effectiveInput.fulfillmentMode,
     lockedMargin,
     commission,
     selectedChannel,
@@ -731,14 +740,14 @@ export default function Home() {
       priceRangeRMB.push(parseFloat(p.toFixed(2)));
     }
     const { fixedCostForVariablePricing, cpaRateForM, variableCpcSalesPercent } = totalFixedCostData;
-    return calculateProfitCurve(priceRangeRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent);
+    return calculateProfitCurve(priceRangeRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent, effectiveInput.fulfillmentMode || "RFBS");
   }, [commission, effectiveInput, totalFixedCostData]);
 
   // 汇率抗压测试
   const stressTest = useMemo(() => {
     if (!commission) return { at5PercentDrop: 0, at10PercentDrop: 0, zeroProfitRate: 0 };
     const { fixedCostForVariablePricing, cpaRateForM, variableCpcSalesPercent } = totalFixedCostData;
-    return calculateExchangeRateStressTest(effectiveInput.targetPriceRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent);
+    return calculateExchangeRateStressTest(effectiveInput.targetPriceRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent, effectiveInput.fulfillmentMode || "RFBS");
   }, [commission, effectiveInput, totalFixedCostData]);
 
   // 多件装利润
@@ -846,7 +855,14 @@ export default function Home() {
     
     try {
       // 读取文件并解析
-      const { csvContent } = await readTabularFileAsCsv(file, "commission");
+      const { csvContent, sheetName } = await readTabularFileAsCsv(file, "commission");
+      const isOfficialTarifs = sheetName === "Full ChinaHK" || sheetName === "MP Tree Tarifs CN" || /RFBS\s*->/i.test(csvContent);
+      if (isOfficialTarifs) {
+        const summary = await loadCommissionData(file, "overwrite");
+        setUploadToast({ message: `✅ 已识别官方 Tarifs 格式：${summary.categories || 0} 个类目，RFBS ${summary.commissionModeMapped?.RFBS || 0} 条，FBP ${summary.commissionModeMapped?.FBP || 0} 条`, type: "success" });
+        e.target.value = "";
+        return;
+      }
       const parsed = smartParseCSV(csvContent, "commission");
       setParsedCsvData(parsed);
       setMappingDataType("commission");
@@ -925,7 +941,7 @@ export default function Home() {
           valueLimitCurrency: row.valueLimitCurrency || input.valueLimitCurrency,
           designatedProviders: input.designatedProviders || [],
         };
-        const rowCommission = getCommissionByCategory(rowInput.primaryCategory, rowInput.secondaryCategory);
+        const rowCommission = getCommissionByCategory(rowInput.primaryCategory, rowInput.secondaryCategory, rowInput.tertiaryCategory);
         if (!rowCommission) {
           return {
             rowIndex: index + 2,
@@ -1051,6 +1067,8 @@ export default function Home() {
       [
         ["输入", "一级类目", input.primaryCategory, ""],
         ["输入", "二级类目", input.secondaryCategory, ""],
+        ...(input.tertiaryCategory ? [["输入", "三级类目", input.tertiaryCategory, ""]] : []),
+        ["输入", "经营模式", input.fulfillmentMode || "RFBS", "平台佣金口径"],
         ["输入", "尺寸", `${input.length}x${input.width}x${input.height} cm`, ""],
         ["输入", "重量", input.weight, "g"],
         ["定价", "售价RMB", input.targetPriceRMB, ""],
@@ -1598,6 +1616,25 @@ export default function Home() {
               )}
             </div>
             
+            {/* 经营模式 - 平台佣金口径 */}
+            <div className="hidden h-8 flex-shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 p-1 sm:flex">
+              {(["RFBS", "FBP"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setInput((prev) => ({ ...prev, fulfillmentMode: mode }))}
+                  className={`h-6 rounded px-2 text-[11px] font-bold transition-colors ${
+                    (input.fulfillmentMode || "RFBS") === mode
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "text-slate-500 hover:bg-white hover:text-slate-700"
+                  }`}
+                  title={`${mode} 佣金模式`}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+            
             {/* 汇率设置组 - 扁平紧凑 */}
             <div className="hidden h-8 flex-shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 sm:flex">
               <span className="text-[11px] text-slate-500 whitespace-nowrap">1 CNY =</span>
@@ -1715,6 +1752,8 @@ export default function Home() {
         <div className="inline-flex h-7 flex-shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm">
           <span>货值口径：{input.valueLimitCurrency === "RMB" ? "人民币" : "卢布"}</span>
           <span className="text-slate-300">|</span>
+          <span>模式：{input.fulfillmentMode || "RFBS"}</span>
+          <span className="text-slate-300">|</span>
           <span>售价：{cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0)} RUB</span>
           <span className="text-slate-300">|</span>
           <span>汇率：1 CNY = {input.exchangeRate.toFixed(2)} RUB</span>
@@ -1728,7 +1767,11 @@ export default function Home() {
                 最近导入物流：{lastImportSummary.channels || 0} 条，人民币货值 {lastImportSummary.valueRMBMapped || 0} 条，卢布货值 {lastImportSummary.valueRUBMapped || 0} 条，时效 {lastImportSummary.deliveryTimeMapped || 0} 条，体积重 {lastImportSummary.volumetricMapped || 0} 条
               </span>
             ) : (
-              <span>最近导入佣金：{lastImportSummary.categories || 0} 个类目，阶梯 {lastImportSummary.commissionTierMapped || 0} 条</span>
+              <span>
+                最近导入佣金：{lastImportSummary.categories || 0} 个类目
+                {lastImportSummary.commissionSheetName ? `，${lastImportSummary.commissionSheetName}` : ""}
+                ，RFBS {lastImportSummary.commissionModeMapped?.RFBS || 0} 条，FBP {lastImportSummary.commissionModeMapped?.FBP || 0} 条
+              </span>
             )}
           </div>
         )}
