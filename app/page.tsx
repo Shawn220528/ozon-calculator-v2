@@ -33,11 +33,12 @@ import {
   reversePriceFromMargin,
   calculateSixTierPricing,
   calculateSuggestedPrice,
+  calculateCpcCost,
 } from "@/lib/calculator";
 import { calculateShippingCost, parseBillingWeight, getBillingModeDescription } from "@/lib/data-hub-context";
 import { PreviewMappingDialog } from "@/components/preview-mapping-dialog";
 import { FieldMapping, ParsedData, smartParseCSV } from "@/lib/smart-parser";
-import { cnyToRub, rubToCny } from "@/lib/currency";
+import { cnyToRub } from "@/lib/currency";
 import { parseBatchInput as parseBatchCsvInput } from "@/lib/batch-parsing";
 import {
   downloadBatchTemplate,
@@ -66,12 +67,15 @@ const DEFAULT_INPUT: CalculationInput = {
   cpaEnabled: false,
   cpaRate: 5,
   cpcEnabled: false,
+  cpcBillingMode: "bidCvr",
   cpcBid: 10,
   cpcConversionRate: 3,
+  cpcSalesPercent: 0,
   targetPriceRMB: 125, // RMB（≈1500 RUB）
   promotionDiscount: 0,
   exchangeRate: 12.0, // 1 CNY = 12 RUB
   withdrawalFee: 1.5,
+  paymentFee: 1,
   exchangeRateBuffer: 0, // 汇率安全缓冲：默认0%
   valueLimitCurrency: "RMB",
   rivalPrice: 0, // 竞品售价
@@ -98,11 +102,14 @@ const EMPTY_INPUT: CalculationInput = {
   cpaEnabled: false,
   cpaRate: 0,
   cpcEnabled: false,
+  cpcBillingMode: "bidCvr",
   cpcBid: 0,
   cpcConversionRate: 0,
+  cpcSalesPercent: 0,
   targetPriceRMB: 0,
   promotionDiscount: 0,
   withdrawalFee: 0,
+  paymentFee: 1,
   exchangeRateBuffer: 0,
   valueLimitCurrency: "RMB",
   rivalPrice: 0,
@@ -442,7 +449,13 @@ export default function Home() {
       const savedData = localStorage.getItem(STORAGE_KEY);
       if (savedData) {
         const parsedData = JSON.parse(savedData) as CalculationInput;
-        setInput({ ...DEFAULT_INPUT, ...parsedData, valueLimitCurrency: parsedData.valueLimitCurrency || "RMB" });
+        setInput({
+          ...DEFAULT_INPUT,
+          ...parsedData,
+          cpcBillingMode: parsedData.cpcBillingMode || "bidCvr",
+          cpcSalesPercent: parsedData.cpcSalesPercent || 0,
+          valueLimitCurrency: parsedData.valueLimitCurrency || "RMB",
+        });
       }
       
       // 旧版本会持久锁定物流渠道；新版只保留当前会话临时选择。
@@ -641,10 +654,13 @@ export default function Home() {
     effectiveInput.width,
     effectiveInput.height,
     effectiveInput.cpcEnabled,
+    effectiveInput.cpcBillingMode,
     effectiveInput.cpcBid,
     effectiveInput.cpcConversionRate,
+    effectiveInput.cpcSalesPercent,
     effectiveInput.exchangeRate,
     effectiveInput.withdrawalFee,
+    effectiveInput.paymentFee,
     lockedMargin,
     commission,
     selectedChannel,
@@ -679,9 +695,24 @@ export default function Home() {
         default: return 0;
       }
     })();
-    const cpcCost = effectiveInput.cpcEnabled && effectiveInput.cpcConversionRate > 0 ? rubToCny(effectiveInput.cpcBid / (effectiveInput.cpcConversionRate / 100), effectiveInput.exchangeRate) : 0;
+    const cpcCost = calculateCpcCost(
+      effectiveInput.cpcEnabled,
+      effectiveInput.cpcBid,
+      effectiveInput.cpcConversionRate,
+      effectiveInput.exchangeRate,
+      effectiveInput.cpcBillingMode || "bidCvr",
+      effectiveInput.cpcSalesPercent || 0,
+      effectiveInput.targetPriceRMB
+    );
+    const variableCpcSalesPercent =
+      effectiveInput.cpcEnabled && (effectiveInput.cpcBillingMode || "bidCvr") === "salesPercent"
+        ? effectiveInput.cpcSalesPercent || 0
+        : 0;
+    const totalFixedCost = effectiveInput.purchaseCost + effectiveInput.domesticShipping + effectiveInput.packagingFee + internationalShipping + cpcCost + returnCost;
     return {
-      totalFixedCost: effectiveInput.purchaseCost + effectiveInput.domesticShipping + effectiveInput.packagingFee + internationalShipping + cpcCost + returnCost,
+      totalFixedCost,
+      fixedCostForVariablePricing: totalFixedCost - (variableCpcSalesPercent > 0 ? cpcCost : 0),
+      variableCpcSalesPercent,
       cpaRateForM: effectiveInput.cpaEnabled ? effectiveInput.cpaRate : 0,
     };
   }, [effectiveInput, selectedChannel]);
@@ -699,15 +730,15 @@ export default function Home() {
     for (let p = minPrice; p <= maxPrice; p += step) {
       priceRangeRMB.push(parseFloat(p.toFixed(2)));
     }
-    const { totalFixedCost, cpaRateForM } = totalFixedCostData;
-    return calculateProfitCurve(priceRangeRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, totalFixedCost);
+    const { fixedCostForVariablePricing, cpaRateForM, variableCpcSalesPercent } = totalFixedCostData;
+    return calculateProfitCurve(priceRangeRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent);
   }, [commission, effectiveInput, totalFixedCostData]);
 
   // 汇率抗压测试
   const stressTest = useMemo(() => {
     if (!commission) return { at5PercentDrop: 0, at10PercentDrop: 0, zeroProfitRate: 0 };
-    const { totalFixedCost, cpaRateForM } = totalFixedCostData;
-    return calculateExchangeRateStressTest(effectiveInput.targetPriceRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, totalFixedCost);
+    const { fixedCostForVariablePricing, cpaRateForM, variableCpcSalesPercent } = totalFixedCostData;
+    return calculateExchangeRateStressTest(effectiveInput.targetPriceRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent);
   }, [commission, effectiveInput, totalFixedCostData]);
 
   // 多件装利润
@@ -1034,6 +1065,7 @@ export default function Home() {
         ["结果", "ROI", result.roi.toFixed(1), "%"],
         ["结果", "利润率", result.profitMargin.toFixed(1), "%"],
         ["成本", "总成本", result.costs.total.toFixed(2), ""],
+        ["成本", "支付手续费", result.costs.paymentFee.toFixed(2), `${input.paymentFee || 0}%`],
         ["物流", "选中渠道", selectedChannel ? `${selectedChannel.thirdParty}-${selectedChannel.name}` : "无", ""],
         ["物流", "计费重", result.chargeableWeight.toFixed(0), "g"],
         ["风险", "警告", result.warnings.join(" | "), ""],
@@ -1607,7 +1639,7 @@ export default function Home() {
               )}
             </div>
             
-            {/* 提现手续费 - 扁平紧凑 */}
+            {/* 提现/支付手续费 - 扁平紧凑 */}
             <div className="hidden h-8 flex-shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 md:flex">
               <span className="text-[11px] text-slate-500 whitespace-nowrap">提现</span>
               <Input
@@ -1618,6 +1650,17 @@ export default function Home() {
                 value={input.withdrawalFee}
                 onChange={(e) => setInput(prev => ({ ...prev, withdrawalFee: parseFloat(e.target.value) || 0 }))}
                 className="h-6 w-[50px] bg-white px-2 text-xs"
+              />
+              <span className="text-[10px] text-slate-400">%</span>
+              <span className="ml-1 text-[11px] text-slate-500 whitespace-nowrap">支付</span>
+              <Input
+                type="number"
+                step="0.1"
+                min="0"
+                max="100"
+                value={input.paymentFee}
+                onChange={(e) => setInput(prev => ({ ...prev, paymentFee: parseFloat(e.target.value) || 0 }))}
+                className="h-6 w-[44px] bg-white px-2 text-xs"
               />
               <span className="text-[10px] text-slate-400">%</span>
             </div>

@@ -85,8 +85,10 @@ export interface CalculationInput {
   cpaEnabled: boolean;
   cpaRate: number; // 百分比
   cpcEnabled: boolean;
+  cpcBillingMode: "bidCvr" | "salesPercent"; // CPC 计费方式
   cpcBid: number; // RUB
   cpcConversionRate: number; // 百分比
+  cpcSalesPercent: number; // 按销售额目标百分比计费
   
   // 定价参数
   targetPriceRMB: number; // RMB (用户以人民币思维输入售价)
@@ -95,6 +97,7 @@ export interface CalculationInput {
   // 全局设置
   exchangeRate: number; // 汇率：1 CNY = X RUB (例如 12.0，即1元人民币兑换12卢布)
   withdrawalFee: number; // 百分比
+  paymentFee: number; // 支付手续费百分比
   exchangeRateBuffer: number; // 汇率安全缓冲百分比（默认0，用于规避结汇风险）
   valueLimitCurrency: ValueLimitCurrency; // 物流货值限制口径
   
@@ -129,6 +132,7 @@ export interface CalculationResult {
     cpcCost: number;
     returnCost: number;
     withdrawalFee: number;
+    paymentFee: number;
     total: number;
   };
 

@@ -180,10 +180,10 @@ export function Dashboard({
     
     // 计算边际贡献率
     const cpaRateForM = input.cpaEnabled ? input.cpaRate : 0;
-    const M = calculateMarginalContribution(commissionRate, input.withdrawalFee, cpaRateForM);
+    const M = calculateMarginalContribution(commissionRate, input.withdrawalFee, cpaRateForM, input.paymentFee);
     
     // 计算固定成本（从 result 中获取）
-    const totalFixedCost = result.costs.total - result.costs.commission - result.costs.withdrawalFee - result.costs.cpaCost;
+    const totalFixedCost = result.costs.total - result.costs.commission - result.costs.withdrawalFee - result.costs.paymentFee - result.costs.cpaCost;
     
     // 计算新利润
     const newPriceRMB = rubToCny(priceRUB, newExchangeRate);
@@ -210,6 +210,7 @@ export function Dashboard({
       { name: "跨境运费", value: result.costs.internationalShipping },
       { name: "平台佣金", value: result.costs.commission },
       { name: "提现手续费", value: result.costs.withdrawalFee },
+      { name: "支付手续费", value: result.costs.paymentFee },
       { name: "广告支出", value: result.costs.cpaCost + result.costs.cpcCost },
       { name: "退货损耗", value: result.costs.returnCost },
       ...(result.taxes?.enabled
@@ -659,6 +660,8 @@ export function Dashboard({
                   enhancedName = `平台佣金 (${result.commissionRate}%)`;
                 } else if (item.name === "提现手续费") {
                   enhancedName = `提现手续费 (${input.withdrawalFee.toFixed(1)}%)`;
+                } else if (item.name === "支付手续费") {
+                  enhancedName = `支付手续费 (${(input.paymentFee || 0).toFixed(1)}%)`;
                 }
                 
                 return (

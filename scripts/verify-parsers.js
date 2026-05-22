@@ -37,6 +37,8 @@ const {
 
 const {
   calculateSuggestedPrice,
+  calculateCpcCost,
+  performFullCalculation,
   reversePriceFromMargin,
 } = loadTsModule(path.join("lib", "calculator.ts"));
 
@@ -67,6 +69,12 @@ function assertDeepEqual(actual, expected, label) {
 
 function assertEqual(actual, expected, label) {
   if (actual !== expected) {
+    throw new Error(`${label}\nexpected ${expected}\nactual   ${actual}`);
+  }
+}
+
+function assertApproxEqual(actual, expected, label, epsilon = 0.000001) {
+  if (Math.abs(actual - expected) > epsilon) {
     throw new Error(`${label}\nexpected ${expected}\nactual   ${actual}`);
   }
 }
@@ -152,6 +160,9 @@ assertEqual(parseEuropeanNumber("30,000.5"), 30000.5, "comma thousands with dot 
 assertEqual(parseEuropeanNumber("0,03432"), 0.03432, "comma decimal number");
 assertEqual(parseEuropeanNumber("2,6"), 2.6, "single comma decimal number");
 assertEqual(parseEuropeanNumber("30.5"), 30.5, "dot decimal number");
+assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "bidCvr", 0, 200), 20, "CPC bid/CVR mode remains unchanged");
+assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", 7, 200), 14, "CPC sales percent mode");
+assertApproxEqual(calculateCpcCost(false, 10, 5, 10, "salesPercent", 7, 200), 0, "disabled CPC has no cost");
 
 const baseSuggestionInput = {
   primaryCategory: "测试一级",
@@ -171,12 +182,15 @@ const baseSuggestionInput = {
   cpaEnabled: false,
   cpaRate: 0,
   cpcEnabled: false,
+  cpcBillingMode: "bidCvr",
   cpcBid: 0,
   cpcConversionRate: 0,
+  cpcSalesPercent: 0,
   targetPriceRMB: 0,
   promotionDiscount: 0,
   exchangeRate: 12,
   withdrawalFee: 1.5,
+  paymentFee: 1,
   exchangeRateBuffer: 0,
   valueLimitCurrency: "RMB",
   rivalPrice: 0,
@@ -250,6 +264,39 @@ const rubLimitSuggestion = calculateSuggestedPrice(
   "RUB"
 );
 assertEqual(rubLimitSuggestion.suggestedPriceRMB, 20, "RUB value-limit suggestion should use RUB threshold");
+
+const paymentFeeBaseResult = performFullCalculation(
+  { ...baseSuggestionInput, targetPriceRMB: 100, withdrawalFee: 0, paymentFee: 0 },
+  suggestionCommission,
+  undefined
+);
+const paymentFeeResult = performFullCalculation(
+  { ...baseSuggestionInput, targetPriceRMB: 100, withdrawalFee: 0, paymentFee: 1 },
+  suggestionCommission,
+  undefined
+);
+assertEqual(paymentFeeResult.costs.paymentFee, 1, "payment fee cost should equal 1% of price");
+assertEqual(
+  Number((paymentFeeBaseResult.netProfit - paymentFeeResult.netProfit).toFixed(2)),
+  1,
+  "payment fee should reduce net profit by 1% of price"
+);
+
+const cpcSalesPercentResult = performFullCalculation(
+  {
+    ...baseSuggestionInput,
+    targetPriceRMB: 200,
+    cpcEnabled: true,
+    cpcBillingMode: "salesPercent",
+    cpcSalesPercent: 7,
+    cpaEnabled: true,
+    cpaRate: 3,
+  },
+  suggestionCommission,
+  baseSuggestionChannel
+);
+assertApproxEqual(cpcSalesPercentResult.costs.cpcCost, 14, "full calculation uses CPC sales percent cost");
+assertApproxEqual(cpcSalesPercentResult.adRiskControl.currentACOS, 10, "ACOS includes CPC sales percent and CPA");
 
 assertDeepEqual(
   parseShippingRateString("¥3.12 + ¥0.0468/1 g"),

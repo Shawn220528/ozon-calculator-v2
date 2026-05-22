@@ -214,6 +214,10 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     () => calculateOzonBackendPricing(input.targetPriceRMB, input.exchangeRate),
     [input.targetPriceRMB, input.exchangeRate]
   );
+  const cpcBillingMode = input.cpcBillingMode || "bidCvr";
+  const cpcSalesCostRMB = input.targetPriceRMB > 0 ? input.targetPriceRMB * ((input.cpcSalesPercent || 0) / 100) : 0;
+  const cpcBidCostRUB = input.cpcConversionRate > 0 ? input.cpcBid / (input.cpcConversionRate / 100) : 0;
+  const cpcBidCostRMB = input.exchangeRate > 0 ? cpcBidCostRUB / input.exchangeRate : 0;
 
   return (
     <div className="space-y-2 pr-1">
@@ -378,14 +382,14 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
       <Section
         id="cost"
         title="成本物流"
-        summary={`采购 ¥${input.purchaseCost || 0} / 头程 ¥${input.domesticShipping || 0} / 包装 ¥${input.packagingFee || 0}`}
+        summary={`采购 ¥${input.purchaseCost || 0} / 头程 ¥${input.domesticShipping || 0} / 支付 ${input.paymentFee || 0}%`}
         icon={<Truck className="h-4 w-4" />}
         openSections={openSections}
         setOpenSections={setOpenSections}
         defaultOpen
       >
         <div className="space-y-2">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs">采购成本</Label>
               <Input
@@ -416,6 +420,18 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 step="0.01"
                 value={input.packagingFee || ""}
                 onChange={(e) => updateField("packagingFee", parseFloat(e.target.value) || 0)}
+                className="h-8 text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">支付手续费 (%)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                step="0.1"
+                value={input.paymentFee || ""}
+                onChange={(e) => updateField("paymentFee", parseFloat(e.target.value) || 0)}
                 className="h-8 text-sm"
               />
             </div>
@@ -525,37 +541,83 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               </button>
             </div>
             <div className={`transition-opacity ${input.cpcEnabled ? "opacity-100" : "opacity-40 pointer-events-none"}`}>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="mb-2 grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => updateField("cpcBillingMode", "bidCvr")}
+                  disabled={!input.cpcEnabled}
+                  className={`h-7 rounded text-xs font-medium transition-colors ${
+                    cpcBillingMode === "bidCvr"
+                      ? "bg-white text-blue-700 shadow-sm"
+                      : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  竞价/CVR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateField("cpcBillingMode", "salesPercent")}
+                  disabled={!input.cpcEnabled}
+                  className={`h-7 rounded text-xs font-medium transition-colors ${
+                    cpcBillingMode === "salesPercent"
+                      ? "bg-white text-blue-700 shadow-sm"
+                      : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  销售额比例
+                </button>
+              </div>
+
+              {cpcBillingMode === "salesPercent" ? (
                 <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">单次竞价 (₽)</Label>
-                  <div className="relative">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">₽</span>
+                  <Label className="text-xs text-muted-foreground">销售额目标占比</Label>
+                  <div className="flex items-center gap-2">
                     <Input
                       type="number"
                       min="0"
+                      max="100"
                       step="0.1"
-                      value={input.cpcBid || ""}
-                      onChange={(e) => updateField("cpcBid", parseFloat(e.target.value) || 0)}
-                      className="h-8 text-sm pl-6"
+                      value={input.cpcSalesPercent || ""}
+                      onChange={(e) => updateField("cpcSalesPercent", parseFloat(e.target.value) || 0)}
+                      className="h-8 text-sm"
+                      disabled={!input.cpcEnabled}
+                    />
+                    <span className="text-xs text-muted-foreground">%</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">单次竞价 (₽)</Label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">₽</span>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={input.cpcBid || ""}
+                        onChange={(e) => updateField("cpcBid", parseFloat(e.target.value) || 0)}
+                        className="h-8 text-sm pl-6"
+                        disabled={!input.cpcEnabled}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">转化率 CVR</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={input.cpcConversionRate || ""}
+                      onChange={(e) => updateField("cpcConversionRate", parseFloat(e.target.value) || 0)}
+                      className="h-8 text-sm"
                       disabled={!input.cpcEnabled}
                     />
                   </div>
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">转化率 CVR</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    value={input.cpcConversionRate || ""}
-                    onChange={(e) => updateField("cpcConversionRate", parseFloat(e.target.value) || 0)}
-                    className="h-8 text-sm"
-                    disabled={!input.cpcEnabled}
-                  />
-                </div>
-              </div>
-              {input.cpcEnabled && input.cpcBid > 0 && input.cpcConversionRate > 0 && (
+              )}
+              {input.cpcEnabled && cpcBillingMode === "bidCvr" && input.cpcBid > 0 && input.cpcConversionRate > 0 && (
                 <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded mt-1 flex items-center gap-1">
                   <TooltipProvider>
                     <Tooltip>
@@ -575,7 +637,14 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                  <span>: ₽{(input.cpcBid / (input.cpcConversionRate / 100)).toFixed(2)} (≈¥{(input.cpcBid / (input.cpcConversionRate / 100) / input.exchangeRate).toFixed(2)})</span>
+                  <span>: ₽{cpcBidCostRUB.toFixed(2)} (≈¥{cpcBidCostRMB.toFixed(2)})</span>
+                </div>
+              )}
+              {input.cpcEnabled && cpcBillingMode === "salesPercent" && input.cpcSalesPercent > 0 && (
+                <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded mt-1 flex flex-wrap items-center gap-1">
+                  <span className="font-medium">单均广告成本</span>
+                  <span>: ¥{cpcSalesCostRMB.toFixed(2)}</span>
+                  <span className="text-blue-500">ACOS {input.cpcSalesPercent.toFixed(1)}%</span>
                 </div>
               )}
             </div>
@@ -639,7 +708,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               )}
               
               {/* CVR 灵敏度提示 */}
-              {input.cpcEnabled && adRiskControl.cvrSensitivity && adRiskControl.cvrSensitivity.costReduction > 0 && (
+              {input.cpcEnabled && cpcBillingMode === "bidCvr" && adRiskControl.cvrSensitivity && adRiskControl.cvrSensitivity.costReduction > 0 && (
                 <div className="text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-2 rounded">
                   💡 提示：若转化率 (CVR) 提升 1%，单均转化成本将下降 ¥{adRiskControl.cvrSensitivity.costReduction.toFixed(2)}
                   {adRiskControl.cvrSensitivity.profitIncreasePercent > 0 && (
