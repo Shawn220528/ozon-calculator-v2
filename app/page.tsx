@@ -222,6 +222,7 @@ interface TopAlertItem {
   id: string;
   severity: TopAlertSeverity;
   label: ReactNode;
+  plainText: string;
   detail?: ReactNode;
   action?: ReactNode;
 }
@@ -233,17 +234,34 @@ const topAlertClassBySeverity: Record<TopAlertSeverity, string> = {
   success: "border-emerald-200 bg-emerald-50 text-emerald-700",
 };
 
-function TopAlertBadge({ item, onDismiss, duplicate = false }: { item: TopAlertItem; onDismiss: (id: string) => void; duplicate?: boolean }) {
+function TopAlertBadge({
+  item,
+  onDismiss,
+  duplicate = false,
+  marquee = false,
+}: {
+  item: TopAlertItem;
+  onDismiss: (id: string) => void;
+  duplicate?: boolean;
+  marquee?: boolean;
+}) {
   return (
-    <div className={`inline-flex h-7 max-w-[520px] flex-shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-sm ${topAlertClassBySeverity[item.severity]}`}>
-      <span className="min-w-0 truncate whitespace-nowrap">{item.label}</span>
+    <div className={`inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-sm ${marquee ? "max-w-none" : "max-w-[520px]"} ${duplicate ? "pointer-events-none" : ""} ${topAlertClassBySeverity[item.severity]}`}>
+      <span className={`min-w-0 whitespace-nowrap ${marquee ? "" : "truncate"}`}>{item.label}</span>
       {!duplicate && item.detail}
       {!duplicate && item.action}
       <button
         type="button"
         aria-label="清除此提示"
         tabIndex={duplicate ? -1 : 0}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (duplicate) return;
+          onDismiss(item.id);
+        }}
         onClick={(event) => {
+          event.preventDefault();
           event.stopPropagation();
           if (duplicate) return;
           onDismiss(item.id);
@@ -257,29 +275,40 @@ function TopAlertBadge({ item, onDismiss, duplicate = false }: { item: TopAlertI
 }
 
 function TopAlertBar({ items, onDismiss }: { items: TopAlertItem[]; onDismiss: (id: string) => void }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const updateWidth = () => setAvailableWidth(element.clientWidth);
+    updateWidth();
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(element);
+    return () => resizeObserver.disconnect();
+  }, []);
+
   if (items.length === 0) return null;
 
-  const totalTextLength = items.reduce((sum, item) => {
-    const label = typeof item.label === "string" || typeof item.label === "number" ? String(item.label) : "";
-    return sum + label.length;
-  }, 0);
-  const useMarquee = items.length > 4 || totalTextLength > 72;
-  const renderedItems = items.map((item) => <TopAlertBadge key={item.id} item={item} onDismiss={onDismiss} />);
+  const totalTextLength = items.reduce((sum, item) => sum + item.plainText.length, 0);
+  const estimatedContentWidth = totalTextLength * 7 + items.length * 78;
+  const useMarquee = items.length > 4 || totalTextLength > 72 || (availableWidth > 0 && estimatedContentWidth > availableWidth);
+  const renderedItems = items.map((item) => <TopAlertBadge key={item.id} item={item} onDismiss={onDismiss} marquee={useMarquee} />);
 
   if (!useMarquee) {
     return (
-      <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-2 overflow-hidden">
+      <div ref={containerRef} className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-2 overflow-hidden">
         {renderedItems}
       </div>
     );
   }
 
   return (
-    <div className="top-alert-marquee group min-w-0 flex-1 overflow-hidden rounded-md border border-slate-200 bg-white/70 px-1.5 py-1 focus-within:[--alert-marquee-state:paused] hover:[--alert-marquee-state:paused]">
+    <div ref={containerRef} className="top-alert-marquee group min-w-0 flex-1 overflow-hidden rounded-md border border-slate-200 bg-white/70 px-1.5 py-1 focus-within:[--alert-marquee-state:paused] hover:[--alert-marquee-state:paused]">
       <div className="top-alert-marquee-track flex w-max items-center gap-2 [animation-play-state:var(--alert-marquee-state,running)]">
         {renderedItems}
         <div aria-hidden="true" className="flex items-center gap-2 pl-2">
-          {items.map((item) => <TopAlertBadge key={`${item.id}-copy`} item={item} onDismiss={onDismiss} duplicate />)}
+          {items.map((item) => <TopAlertBadge key={`${item.id}-copy`} item={item} onDismiss={onDismiss} duplicate marquee />)}
         </div>
       </div>
     </div>
@@ -1293,7 +1322,100 @@ export default function Home() {
   const rawTopAlerts = useMemo<TopAlertItem[]>(() => {
     const alerts: TopAlertItem[] = [];
 
+    alerts.push({
+      id: `operational-status-${operationalStatus.label}`,
+      severity: operationalStatus.label === "正常" ? "success" : operationalStatus.label === "有风险" ? "warning" : "danger",
+      label: (
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-current" />
+          <span>{operationalStatus.label}</span>
+        </span>
+      ),
+      plainText: `经营状态：${operationalStatus.label}`,
+      action: (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setShowDiagnostic((open) => !open);
+          }}
+          className="ml-1 rounded bg-white/40 px-1.5 py-0.5 text-[10px] font-bold hover:bg-white/70"
+        >
+          查看诊断
+        </button>
+      ),
+    });
+
+    alerts.push({
+      id: `sales-context-${input.valueLimitCurrency}-${input.fulfillmentMode || "RFBS"}-${input.targetPriceRMB}-${input.exchangeRate}`,
+      severity: "info",
+      label: (
+        <>
+          货值口径：{input.valueLimitCurrency === "RMB" ? "人民币" : "卢布"}
+          <span className="mx-1 opacity-45">|</span>
+          模式：{input.fulfillmentMode || "RFBS"}
+          <span className="mx-1 opacity-45">|</span>
+          售价：{cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0)} RUB
+          <span className="mx-1 opacity-45">|</span>
+          汇率：1 CNY = {input.exchangeRate.toFixed(2)} RUB
+        </>
+      ),
+      plainText: `货值口径${input.valueLimitCurrency} 模式${input.fulfillmentMode || "RFBS"} 售价${cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0)}RUB 汇率${input.exchangeRate.toFixed(2)}`,
+    });
+
+    if (lastImportSummary) {
+      const label = lastImportSummary.type === "shipping"
+        ? `最近导入物流：${lastImportSummary.channels || 0} 条，人民币货值 ${lastImportSummary.valueRMBMapped || 0} 条，卢布货值 ${lastImportSummary.valueRUBMapped || 0} 条，时效 ${lastImportSummary.deliveryTimeMapped || 0} 条，体积重 ${lastImportSummary.volumetricMapped || 0} 条`
+        : `最近导入佣金：${lastImportSummary.categories || 0} 个类目${lastImportSummary.commissionSheetName ? `，${lastImportSummary.commissionSheetName}` : ""}，RFBS ${lastImportSummary.commissionModeMapped?.RFBS || 0} 条，FBP ${lastImportSummary.commissionModeMapped?.FBP || 0} 条`;
+      alerts.push({
+        id: `last-import-${lastImportSummary.type}-${label}`,
+        severity: "success",
+        label: (
+          <span className="inline-flex items-center gap-1.5">
+            <FileText className="h-3.5 w-3.5" />
+            <span>{label}</span>
+          </span>
+        ),
+        plainText: label,
+      });
+    }
+
+    const dataStatusText = `${dataStatus.label}，佣金 ${dataStatus.commissionCategories}，物流 ${dataStatus.shippingChannels}，货值覆盖 ${dataStatus.valueCoverage}%`;
+    alerts.push({
+      id: `data-status-${dataStatus.label}-${dataStatus.commissionCategories}-${dataStatus.shippingChannels}-${dataStatus.valueCoverage}`,
+      severity: dataStatus.usingDefaultData ? "warning" : "info",
+      label: (
+        <span className="inline-flex items-center gap-1.5">
+          <FileText className="h-3.5 w-3.5" />
+          <span>{dataStatusText}</span>
+        </span>
+      ),
+      plainText: dataStatusText,
+    });
+
+    if (shippingChannels.available.length === 0 && shippingData.length > 0) {
+      alerts.push({
+        id: `fatal-no-shipping-${shippingChannels.unavailable.length}`,
+        severity: "danger",
+        label: "致命：无法匹配物流",
+        plainText: `致命：无法匹配物流，${shippingChannels.unavailable.length} 条渠道不可用`,
+        action: (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setShowDiagnostic((open) => !open);
+            }}
+            className="ml-1 rounded bg-white/25 px-1.5 py-0.5 text-[10px] font-bold hover:bg-white/40"
+          >
+            {showDiagnostic ? "隐藏" : "检查"}
+          </button>
+        ),
+      });
+    }
+
     if (priceSuggestion && priceSuggestion.suggestedPriceRMB > 0) {
+      const priceSuggestionText = `建议售价 ¥${priceSuggestion.suggestedPriceRMB}，约 ${Math.round(priceSuggestion.suggestedPriceRUB).toLocaleString()} ₽，${priceSuggestion.targetMargin ? `可达 ${priceSuggestion.targetMargin}% 并匹配 ${priceSuggestion.channelName}` : `可匹配 ${priceSuggestion.channelName}`}${priceSuggestion.unfixableChannelCount > 0 ? `，另有 ${priceSuggestion.unfixableChannelCount} 个渠道调价无法修复` : ""}`;
       alerts.push({
         id: `price-suggestion-${Math.ceil(priceSuggestion.suggestedPriceRMB)}-${priceSuggestion.channelName}`,
         severity: "warning",
@@ -1309,6 +1431,7 @@ export default function Home() {
             )}
           </>
         ),
+        plainText: priceSuggestionText,
         action: (
           <button
             type="button"
@@ -1329,6 +1452,7 @@ export default function Home() {
         id: "price-unfixable",
         severity: "danger",
         label: "所有渠道因尺寸/重量/属性拦截，调价无法解决",
+        plainText: "所有渠道因尺寸重量属性拦截，调价无法解决",
       });
     }
 
@@ -1337,11 +1461,12 @@ export default function Home() {
         id: "negative-profit",
         severity: "danger",
         label: `亏损: ¥${Math.abs(result.netProfit).toFixed(2)}`,
+        plainText: `亏损 ${Math.abs(result.netProfit).toFixed(2)} 元`,
       });
     }
 
     if (dimensionOrWeightExceeded) {
-      alerts.push({ id: "dimension-weight-exceeded", severity: "danger", label: "超限" });
+      alerts.push({ id: "dimension-weight-exceeded", severity: "danger", label: "超限", plainText: "尺寸或重量超限" });
     }
 
     if (priceLimitAlertInfo) {
@@ -1356,6 +1481,7 @@ export default function Home() {
         id: `price-limit-${title}-${priceLimitAlertInfo.unit}`,
         severity: "danger",
         label: title,
+        plainText: `${title}：当前 ${priceLimitAlertInfo.unit}${formatLimit(priceLimitAlertInfo.currentValue)}，渠道要求 ${priceLimitAlertInfo.minValue !== undefined ? `${priceLimitAlertInfo.unit}${formatLimit(priceLimitAlertInfo.minValue)}` : "无下限"}${priceLimitAlertInfo.minValue !== undefined && priceLimitAlertInfo.maxValue !== undefined ? " 到 " : ""}${priceLimitAlertInfo.maxValue !== undefined ? `${priceLimitAlertInfo.unit}${formatLimit(priceLimitAlertInfo.maxValue)}` : "无上限"}`,
         detail: (
           <details className="group relative ml-1 inline">
             <summary className="inline cursor-help list-none text-xs opacity-75 hover:opacity-100">ⓘ</summary>
@@ -1387,11 +1513,12 @@ export default function Home() {
         id: "volumetric-billing",
         severity: "warning",
         label: `计抛: ${selectedBillingInfo.billingWeight.toFixed(0)}g`,
+        plainText: `计抛 ${selectedBillingInfo.billingWeight.toFixed(0)}g`,
       });
     }
 
     if (result.adRiskControl?.isOverBudget) {
-      alerts.push({ id: "ad-over-budget", severity: "warning", label: "广告超支" });
+      alerts.push({ id: "ad-over-budget", severity: "warning", label: "广告超支", plainText: "广告超支" });
     }
 
     if (input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined && isProfitMarginBelowThreshold(result.profitMargin, input.profitWarningThreshold)) {
@@ -1399,11 +1526,12 @@ export default function Home() {
         id: "profit-threshold",
         severity: "danger",
         label: `利润 ${result.profitMargin.toFixed(1)}% < 阈值 ${input.profitWarningThreshold}%`,
+        plainText: `利润 ${result.profitMargin.toFixed(1)}% 低于阈值 ${input.profitWarningThreshold}%`,
       });
     }
 
     Array.from(new Set(result.suggestions.slice(0, 2))).forEach((suggestion, index) => {
-      alerts.push({ id: `suggestion-${index}-${suggestion}`, severity: "info", label: suggestion });
+      alerts.push({ id: `suggestion-${index}-${suggestion}`, severity: "info", label: suggestion, plainText: suggestion });
     });
 
     const weightSaved = (selectedBillingInfo?.volumetricWeight || 0) - input.weight;
@@ -1412,18 +1540,30 @@ export default function Home() {
         id: `weight-save-${Math.round(weightSaved)}`,
         severity: "success",
         label: `减重${weightSaved.toFixed(0)}g进下一阶梯`,
+        plainText: `减重 ${weightSaved.toFixed(0)}g 进入下一阶梯`,
       });
     }
 
     if (alerts.length === 0 && !result.warnings.length && result.netProfit >= 0 && !selectedBillingInfo?.isVolumetric) {
-      alerts.push({ id: "all-good", severity: "success", label: "参数正常" });
+      alerts.push({ id: "all-good", severity: "success", label: "参数正常", plainText: "参数正常" });
     }
 
     return alerts;
   }, [
+    dataStatus.commissionCategories,
+    dataStatus.label,
+    dataStatus.shippingChannels,
+    dataStatus.usingDefaultData,
+    dataStatus.valueCoverage,
     dimensionOrWeightExceeded,
+    input.exchangeRate,
+    input.fulfillmentMode,
     input.profitWarningThreshold,
+    input.targetPriceRMB,
+    input.valueLimitCurrency,
     input.weight,
+    lastImportSummary,
+    operationalStatus.label,
     priceLimitAlertInfo,
     priceSuggestion,
     result.adRiskControl?.isOverBudget,
@@ -1432,6 +1572,10 @@ export default function Home() {
     result.suggestions,
     result.warnings.length,
     selectedBillingInfo,
+    shippingChannels.available.length,
+    shippingChannels.unavailable.length,
+    shippingData.length,
+    showDiagnostic,
   ]);
 
   const activeTopAlertIdKey = useMemo(
@@ -1735,61 +1879,15 @@ export default function Home() {
       {/* 🔹 全局诊断通栏 - 横跨全屏，自适应滚动，去重渲染 */}
       <div 
         id="global-diagnostic-bar"
-        className="mx-auto flex h-9 w-full max-w-[1480px] items-center justify-start gap-2 overflow-x-auto border-b border-slate-200 bg-slate-50 px-3 py-1 scrollbar-thin md:justify-center"
+        className="mx-auto flex h-9 w-full max-w-[1480px] items-center justify-start overflow-hidden border-b border-slate-200 bg-slate-50 px-3 py-1 md:justify-center"
         style={{ 
           minHeight: '36px',
           overflowY: 'hidden'
         }}
       >
-        <button
-          type="button"
-          onClick={() => setShowDiagnostic(!showDiagnostic)}
-          className={`inline-flex h-7 flex-shrink-0 items-center gap-2 rounded-md border px-2.5 text-xs font-bold shadow-sm ${operationalStatus.className}`}
-        >
-          <span className="inline-block h-2 w-2 rounded-full bg-current" />
-          <span>{operationalStatus.label}</span>
-          <span className="font-medium opacity-75">查看诊断</span>
-        </button>
-        <div className="inline-flex h-7 flex-shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 shadow-sm">
-          <span>货值口径：{input.valueLimitCurrency === "RMB" ? "人民币" : "卢布"}</span>
-          <span className="text-slate-300">|</span>
-          <span>模式：{input.fulfillmentMode || "RFBS"}</span>
-          <span className="text-slate-300">|</span>
-          <span>售价：{cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0)} RUB</span>
-          <span className="text-slate-300">|</span>
-          <span>汇率：1 CNY = {input.exchangeRate.toFixed(2)} RUB</span>
-        </div>
-
-        {lastImportSummary && (
-          <div className="inline-flex h-7 flex-shrink-0 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-semibold text-emerald-800 shadow-sm">
-            <FileText className="h-3.5 w-3.5" />
-            {lastImportSummary.type === "shipping" ? (
-              <span>
-                最近导入物流：{lastImportSummary.channels || 0} 条，人民币货值 {lastImportSummary.valueRMBMapped || 0} 条，卢布货值 {lastImportSummary.valueRUBMapped || 0} 条，时效 {lastImportSummary.deliveryTimeMapped || 0} 条，体积重 {lastImportSummary.volumetricMapped || 0} 条
-              </span>
-            ) : (
-              <span>
-                最近导入佣金：{lastImportSummary.categories || 0} 个类目
-                {lastImportSummary.commissionSheetName ? `，${lastImportSummary.commissionSheetName}` : ""}
-                ，RFBS {lastImportSummary.commissionModeMapped?.RFBS || 0} 条，FBP {lastImportSummary.commissionModeMapped?.FBP || 0} 条
-              </span>
-            )}
-          </div>
-        )}
-
-        <div className={`inline-flex h-7 flex-shrink-0 items-center gap-2 rounded-md border px-2.5 text-xs font-semibold shadow-sm ${
-          dataStatus.usingDefaultData ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-blue-50 text-blue-800 border-blue-200"
-        }`}>
-          <FileText className="h-3.5 w-3.5" />
-          <span>{dataStatus.label}</span>
-          <span>佣金 {dataStatus.commissionCategories}</span>
-          <span>物流 {dataStatus.shippingChannels}</span>
-          <span>货值覆盖 {dataStatus.valueCoverage}%</span>
-        </div>
-
         <TopAlertBar items={topAlerts} onDismiss={handleDismissTopAlert} />
 
-        {showDiagnostic && !(shippingChannels.available.length === 0 && shippingData.length > 0) && (
+        {showDiagnostic && (
           <>
             <div className="fixed inset-0 z-[70] bg-black/20" onClick={() => setShowDiagnostic(false)} />
             <div className="fixed left-1/2 top-[96px] z-[75] w-[520px] max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-4 text-xs text-slate-700 shadow-2xl">
@@ -1839,180 +1937,6 @@ export default function Home() {
           </>
         )}
 
-        {/* 🔴 致命错误 - 无可用渠道（唯一）- 强烈警报 */}
-        {shippingChannels.available.length === 0 && shippingData.length > 0 && (
-          <div className="inline-flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-red-700 bg-red-600 px-2.5 text-xs font-bold text-white shadow-sm">
-            <AlertCircle className="h-3.5 w-3.5" />
-            <span>致命：无法匹配物流</span>
-            <button 
-              type="button"
-              onClick={() => setShowDiagnostic(!showDiagnostic)}
-              className="ml-1 rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-bold hover:bg-white/30"
-            >
-              {showDiagnostic ? '隐藏' : '[检查]'}
-            </button>
-            {showDiagnostic && (
-              <>
-                <div 
-                  className="fixed inset-0 z-[70] bg-black/30" 
-                  onClick={() => setShowDiagnostic(false)}
-                />
-                <div 
-                  className="fixed z-[75] p-4 bg-white text-slate-700 rounded-lg shadow-2xl border-2 border-red-200 text-xs whitespace-nowrap min-w-[320px] max-h-[450px] overflow-y-auto"
-                  style={{ left: '50%', top: '100px', transform: 'translateX(-50%)' }}
-                >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-bold text-red-600">🔍 问题诊断与解决方案</div>
-                  <button 
-                    onClick={() => setShowDiagnostic(false)}
-                    className="px-2 py-0.5 text-xs text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded"
-                  >
-                    ✕ 关闭
-                  </button>
-                </div>
-                
-                {/* 检查输入是否完整 */}
-                <div className="mb-3 bg-slate-50 p-2 rounded">
-                  <div className="font-medium text-slate-700 mb-2">📝 输入检查：</div>
-                  
-                  {/* 尺寸 */}
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={input.length > 0 && input.width > 0 && input.height > 0 ? "text-green-600" : "text-red-600"}>
-                      {input.length > 0 && input.width > 0 && input.height > 0 ? "✓" : "✗"} 尺寸
-                    </span>
-                    {input.length > 0 && input.width > 0 && input.height > 0 && (
-                      <span className="text-slate-500 text-[10px]">{input.length}×{input.width}×{input.height}cm</span>
-                    )}
-                  </div>
-                  
-                  {/* 重量 */}
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={input.weight > 0 ? "text-green-600" : "text-red-600"}>
-                      {input.weight > 0 ? "✓" : "✗"} 重量
-                    </span>
-                    {input.weight > 0 && (
-                      <span className="text-slate-500 text-[10px]">{input.weight}g</span>
-                    )}
-                  </div>
-                  
-                  {/* 售价 */}
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={input.targetPriceRMB > 0 ? "text-green-600" : "text-orange-600"}>
-                      {input.targetPriceRMB > 0 ? "✓" : "?-"} 售价
-                    </span>
-                    {input.targetPriceRMB > 0 && (
-                      <span className="text-slate-500 text-[10px]">¥{input.targetPriceRMB}</span>
-                    )}
-                  </div>
-                  
-                  {/* 属性 */}
-                  <div className="flex items-center gap-2">
-                    <span className={input.hasBattery || input.hasLiquid ? "text-orange-600" : "text-green-600"}>
-                      {input.hasBattery || input.hasLiquid ? "⚠" : "✓"} 属性
-                    </span>
-                    <span className="text-slate-500 text-[10px]">
-                      {input.hasBattery && "带电"}{input.hasBattery && input.hasLiquid && "/"}{input.hasLiquid && "带液"}
-                      {!input.hasBattery && !input.hasLiquid && "普通"}
-                    </span>
-                  </div>
-                </div>
-                
-                {/* 分析结果和建议 */}
-                <div className="mb-3">
-                  <div className="font-medium text-slate-700 mb-1">💡 建议：</div>
-                  {shippingChannels.unavailable.length > 0 && (
-                    <div className="text-red-600 ml-2 mb-2">
-                      • {summarizeInterceptionReasons(shippingChannels.unavailable)}
-                    </div>
-                  )}
-                  
-                  {/* 如果缺少尺寸或重量 */}
-                  {((input.length <= 0 || input.width <= 0 || input.height <= 0) || input.weight <= 0) && (
-                    <div className="text-orange-600 ml-2 mb-2">
-                      • 请填写完整的尺寸和重量信息
-                    </div>
-                  )}
-                  
-                  {/* 如果填写了尺寸重量但没有售价 - 显示价格建议 */}
-                  {/* 🔴 智能售价建议：区分可修复/不可修复渠道 */}
-                  {input.length > 0 && input.width > 0 && input.height > 0 && input.weight > 0 && input.targetPriceRMB <= 0 && shippingChannels.unavailable.length > 0 && (() => {
-                    const suggestion = priceSuggestion || calculateSuggestedPrice(
-                      shippingChannels.unavailable,
-                      effectiveRubPerCny,
-                      input.valueLimitCurrency,
-                      { ...input, exchangeRate: effectiveRubPerCny },
-                      commission,
-                      20
-                    );
-                    if (suggestion.fixableChannels.length > 0) {
-                      return (
-                        <div className="bg-amber-50 p-2 rounded mb-2">
-                          <div className="text-amber-700 font-medium mb-1">💰 调整售价可匹配以下渠道：</div>
-                          {suggestion.fixableChannels.slice(0, 5).map((opt, idx) => (
-                            <div key={idx} className="flex justify-between items-center text-[10px] mb-1">
-                              <span className="text-slate-600">{opt.channelName}</span>
-                              <span className="font-semibold text-amber-700">
-                                ≥ ¥{opt.suggestedPriceRMB} (≈{Math.round(opt.minValueRUB).toLocaleString()}₽)
-                              </span>
-                            </div>
-                          ))}
-                          {suggestion.unfixableChannelCount > 0 && (
-                            <div className="text-orange-600 text-[10px] mt-1 border-t border-amber-200 pt-1">
-                              ⚠️ 另有 {suggestion.unfixableChannelCount} 个渠道因尺寸/重量/属性无法匹配，调价无法解决
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-                    if (suggestion.cannotFixByPrice) {
-                      return (
-                        <div className="bg-red-50 p-2 rounded mb-2">
-                          <div className="text-red-700 font-medium">⚠️ 调价无法解决</div>
-                          <div className="text-red-600 text-[10px]">
-                            所有渠道均因尺寸/重量/属性等原因无法匹配，仅调整售价无法解决。
-                          </div>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                  
-                  {/* 如果尺寸重量售价都填了但还是没有渠道 - 显示具体原因 */}
-                  {input.length > 0 && input.width > 0 && input.height > 0 && input.weight > 0 && input.targetPriceRMB > 0 && shippingChannels.unavailable.length > 0 && (
-                    <div className="bg-red-50 p-2 rounded">
-                      <div className="text-red-700 font-medium mb-1">⚠️ 被拦截原因：</div>
-                      {shippingChannels.unavailable.slice(0, 2).map((ch, idx) => (
-                        <div key={idx} className="text-slate-600 text-[10px] mb-1">
-                          {ch.name}: {ch.reason || "不符合渠道要求"}
-                        </div>
-                      ))}
-                      {shippingChannels.unavailable.length > 2 && (
-                        <div className="text-slate-400 text-[9px]">
-                          ...还有 {shippingChannels.unavailable.length - 2} 个渠道
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  
-                  {/* 如果是属性问题 */}
-                  {(input.hasBattery || input.hasLiquid) && (
-                    <div className="text-orange-600 ml-2 mb-2">
-                      • 您的商品带有特殊属性（带电/带液），请确保选择支持该属性的物流渠道
-                    </div>
-                  )}
-                </div>
-                
-                {/* 通用建议 */}
-                <div className="mt-2 pt-2 border-t border-slate-200 text-slate-500 text-[10px]">
-                  <div>• 尝试调整参数后重新计算</div>
-                  <div>• 或更换其他物流渠道</div>
-                </div>
-              </div>
-              </>
-            )}
-          </div>
-        )}
-        
       </div>
       
       {/* 🔹 主内容区 - 四区紧凑经营工作台 */}
