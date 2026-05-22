@@ -46,6 +46,7 @@ import {
   downloadShippingTemplate,
 } from "@/lib/template-export";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
+import { isProfitMarginBelowThreshold } from "@/lib/profit-threshold";
 import { selectShippingSheetName } from "@/lib/shipping-workbook";
 import { selectCommissionSheetName } from "@/lib/commission-parsing";
 
@@ -1074,8 +1075,8 @@ export default function Home() {
         ["定价", "售价RMB", input.targetPriceRMB, ""],
         ["定价", "售价RUB", cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0), ""],
         ...(ozonPricing.isValid ? [
-          ["定价", "Ozon后台定价RMB", ozonPricing.ozonBackendPriceRMB.toFixed(2), "前台售价 ÷ 40%"],
-          ["定价", "Ozon折扣前价格RMB", ozonPricing.ozonOriginalPriceRMB.toFixed(2), "后台定价 ÷ 60%"],
+          ["定价", "Ozon后台定价RMB", String(ozonPricing.ozonBackendPriceRMB), "前台售价 ÷ 40%"],
+          ["定价", "Ozon折扣前价格RMB", String(ozonPricing.ozonOriginalPriceRMB), "后台定价 ÷ 60%"],
           ["定价", "Ozon后台定价RUB", ozonPricing.ozonBackendPriceRUB, "参考平台币种"],
           ["定价", "Ozon折扣前价格RUB", ozonPricing.ozonOriginalPriceRUB, "参考平台币种"],
         ] : []),
@@ -1393,7 +1394,7 @@ export default function Home() {
       alerts.push({ id: "ad-over-budget", severity: "warning", label: "广告超支" });
     }
 
-    if (input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined && result.profitMargin < input.profitWarningThreshold) {
+    if (input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined && isProfitMarginBelowThreshold(result.profitMargin, input.profitWarningThreshold)) {
       alerts.push({
         id: "profit-threshold",
         severity: "danger",

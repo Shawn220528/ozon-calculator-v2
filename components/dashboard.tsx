@@ -39,6 +39,7 @@ import { calculateShippingCost } from "@/lib/data-hub-context";
 import { calculateExchangeRateStressTest, getCommissionRate, getCommissionTiersForMode, calculateMarginalContribution, calculateNetProfit, detectShippingDimensionLimits } from "@/lib/calculator";
 import { cnyToRub, rubToCny } from "@/lib/currency";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
+import { isProfitMarginBelowThreshold } from "@/lib/profit-threshold";
 import {
   PieChart,
   Pie,
@@ -343,7 +344,7 @@ export function Dashboard({
     }> = [];
 
     const targetMargin = profitWarningThreshold ?? 15;
-    if (result.netProfit < 0 || result.profitMargin < targetMargin) {
+    if (result.netProfit < 0 || isProfitMarginBelowThreshold(result.profitMargin, targetMargin)) {
       const gap = Math.max(0, targetMargin - result.profitMargin);
       const suggestedTier = sixTierPricing.find((tier) => !tier.disabled && tier.profitMargin >= targetMargin);
       actions.push({
@@ -429,7 +430,7 @@ export function Dashboard({
     ? { label: "不建议上架", className: "bg-red-50 text-red-700 border-red-200" }
     : shippingChannels.available.length === 0
       ? { label: "物流不可发", className: "bg-red-50 text-red-700 border-red-200" }
-      : result.profitMargin < (profitWarningThreshold ?? 10)
+      : isProfitMarginBelowThreshold(result.profitMargin, profitWarningThreshold ?? 10)
         ? { label: "谨慎测试", className: "bg-amber-50 text-amber-700 border-amber-200" }
         : { label: "可进入测试", className: "bg-emerald-50 text-emerald-700 border-emerald-200" };
 
@@ -544,7 +545,7 @@ export function Dashboard({
         </CardHeader>
         <CardContent className="px-3 pb-3">
           {/* 🔹 利润预警提示 */}
-          {profitWarningThreshold !== undefined && profitWarningThreshold !== null && result.profitMargin < profitWarningThreshold && (
+          {profitWarningThreshold !== undefined && profitWarningThreshold !== null && isProfitMarginBelowThreshold(result.profitMargin, profitWarningThreshold) && (
             <div className="mb-3 flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-center">
               <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
               <div className="text-sm text-amber-800">
@@ -745,10 +746,10 @@ export function Dashboard({
                       {ozonTierPricing.isValid && (
                         <div className="mt-2 rounded-md border border-white/70 bg-white/70 px-2 py-1.5">
                           <div className="flex items-center justify-between gap-2 text-[10px] font-semibold text-slate-600">
-                            <span>后台 ¥{ozonTierPricing.ozonBackendPriceRMB.toFixed(2)}</span>
+                            <span>后台 ¥{ozonTierPricing.ozonBackendPriceRMB}</span>
                             <button
                               type="button"
-                              onClick={() => onCopyOzonPrice?.(`${tier.label} 后台定价`, ozonTierPricing.ozonBackendPriceRMB.toFixed(2))}
+                              onClick={() => onCopyOzonPrice?.(`${tier.label} 后台定价`, String(ozonTierPricing.ozonBackendPriceRMB))}
                               className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                               title="复制后台定价"
                             >
@@ -756,10 +757,10 @@ export function Dashboard({
                             </button>
                           </div>
                           <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] text-slate-500">
-                            <span>折前 ¥{ozonTierPricing.ozonOriginalPriceRMB.toFixed(2)}</span>
+                            <span>折前 ¥{ozonTierPricing.ozonOriginalPriceRMB}</span>
                             <button
                               type="button"
-                              onClick={() => onCopyOzonPrice?.(`${tier.label} 折扣前价格`, ozonTierPricing.ozonOriginalPriceRMB.toFixed(2))}
+                              onClick={() => onCopyOzonPrice?.(`${tier.label} 折扣前价格`, String(ozonTierPricing.ozonOriginalPriceRMB))}
                               className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                               title="复制折扣前价格"
                             >

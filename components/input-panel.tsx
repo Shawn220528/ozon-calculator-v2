@@ -21,6 +21,7 @@ import { Slider } from "@/components/ui/slider";
 import { useDataHub } from "@/lib/data-hub-context";
 import { CalculationInput, ShippingChannel } from "@/lib/types";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
+import { isProfitMarginBelowThreshold } from "@/lib/profit-threshold";
 
 /**
  * 🔹 全局汇率转换准则 (Exchange Rate Conversion Rules)
@@ -969,7 +970,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                       <span className="text-[10px] font-medium text-slate-500">{item.label}</span>
                       <button
                         type="button"
-                        onClick={() => onCopyOzonPrice?.(item.label, item.valueRMB.toFixed(2))}
+                        onClick={() => onCopyOzonPrice?.(item.label, String(item.valueRMB))}
                         className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                         title={`复制${item.label}`}
                       >
@@ -1064,8 +1065,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               placeholder="留空关闭预警"
             />
             {input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined && currentProfitMargin !== undefined && (
-              <div className={`text-xs p-2 rounded-md font-medium ${currentProfitMargin >= input.profitWarningThreshold ? "text-green-700 bg-green-50 border border-green-200" : "text-amber-700 bg-amber-50 border border-amber-200"}`}>
-                当前 {currentProfitMargin.toFixed(1)}% {currentProfitMargin >= input.profitWarningThreshold ? "✓ 达标" : "⚠️ 低于阈值"}
+              <div className={`text-xs p-2 rounded-md font-medium ${!isProfitMarginBelowThreshold(currentProfitMargin, input.profitWarningThreshold) ? "text-green-700 bg-green-50 border border-green-200" : "text-amber-700 bg-amber-50 border border-amber-200"}`}>
+                当前 {currentProfitMargin.toFixed(1)}% {!isProfitMarginBelowThreshold(currentProfitMargin, input.profitWarningThreshold) ? "✓ 达标" : "⚠️ 低于阈值"}
               </div>
             )}
           </div>

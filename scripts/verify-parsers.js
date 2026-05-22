@@ -38,6 +38,10 @@ const {
 } = loadTsModule(path.join("lib", "ozon-pricing.ts"));
 
 const {
+  isProfitMarginBelowThreshold,
+} = loadTsModule(path.join("lib", "profit-threshold.ts"));
+
+const {
   calculateSuggestedPrice,
   calculateCpcCost,
   performFullCalculation,
@@ -469,15 +473,19 @@ assertDeepEqual(
     isValid: true,
     frontPriceRMB: 125,
     frontPriceRUB: 1500,
-    ozonBackendPriceRMB: 312.5,
-    ozonBackendPriceRUB: 3750,
-    ozonOriginalPriceRMB: 520.83,
-    ozonOriginalPriceRUB: 6250,
+    ozonBackendPriceRMB: 313,
+    ozonBackendPriceRUB: 3756,
+    ozonOriginalPriceRMB: 522,
+    ozonOriginalPriceRUB: 6264,
   },
   "Ozon backend pricing"
 );
 assertEqual(calculateOzonBackendPricing(0, 12).isValid, false, "Ozon pricing invalid without price");
 assertEqual(calculateOzonBackendPricing(125, 0).isValid, false, "Ozon pricing invalid without rate");
+assertEqual(isProfitMarginBelowThreshold(20, 20), false, "profit threshold should not warn at exact threshold");
+assertEqual(isProfitMarginBelowThreshold(19.96, 20), false, "profit threshold should use one-decimal display rounding");
+assertEqual(isProfitMarginBelowThreshold(19.94, 20), true, "profit threshold should warn below display threshold");
+assertEqual(isProfitMarginBelowThreshold(20.04, 20), false, "profit threshold should not warn above threshold");
 
 const newShippingWorkbook = "E:\\CodexProjects\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx";
 if (fs.existsSync(newShippingWorkbook)) {

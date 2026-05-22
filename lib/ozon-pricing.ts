@@ -10,8 +10,12 @@ export interface OzonBackendPricing {
   ozonOriginalPriceRUB: number;
 }
 
-function roundRmb(value: number): number {
+function normalizeRmb(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function ceilRmb(value: number): number {
+  return Math.ceil(value);
 }
 
 function roundRub(value: number): number {
@@ -35,12 +39,12 @@ export function calculateOzonBackendPricing(frontPriceRMB: number, rubPerCny: nu
     };
   }
 
-  const backendRMB = roundRmb(price / 0.4);
-  const originalRMB = roundRmb(backendRMB / 0.6);
+  const backendRMB = ceilRmb(price / 0.4);
+  const originalRMB = ceilRmb(backendRMB / 0.6);
 
   return {
     isValid: true,
-    frontPriceRMB: roundRmb(price),
+    frontPriceRMB: normalizeRmb(price),
     frontPriceRUB: roundRub(cnyToRub(price, rate)),
     ozonBackendPriceRMB: backendRMB,
     ozonBackendPriceRUB: roundRub(cnyToRub(backendRMB, rate)),
