@@ -377,6 +377,7 @@ export default function Home() {
   const [showAllUnavailable, setShowAllUnavailable] = useState(false); // 🔹 显示全部不可用渠道
   const [sortMode, setSortMode] = useState<'cost' | 'time' | 'rating'>('cost'); // 🔹 推荐物流排序模式
   const [dataManagementOpen, setDataManagementOpen] = useState(false); // 🔹 数据管理抽屉状态
+  const dataManagementRef = useRef<HTMLDivElement>(null);
   const [commissionFileName, setCommissionFileName] = useState<string>("");
   const [shippingFileName, setShippingFileName] = useState<string>("");
   
@@ -404,10 +405,28 @@ export default function Home() {
       if (e.key === 'Escape' && showDiagnostic) {
         setShowDiagnostic(false);
       }
+      if (e.key === 'Escape' && dataManagementOpen) {
+        setDataManagementOpen(false);
+      }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [showDiagnostic]);
+  }, [showDiagnostic, dataManagementOpen]);
+
+  useEffect(() => {
+    if (!dataManagementOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && dataManagementRef.current?.contains(target)) {
+        return;
+      }
+      setDataManagementOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [dataManagementOpen]);
   
   // 🔹 渠道收藏夹
   const [favoriteChannels, setFavoriteChannels] = useState<string[]>([]);
@@ -1666,14 +1685,22 @@ export default function Home() {
         {/* 外部容器 */}
         <div className="relative mx-auto flex h-full w-full max-w-[1480px] items-center justify-between px-3">
           {/* 左侧：品牌标题 */}
-          <div className="flex-shrink-0">
-            <span className="text-xs font-bold text-slate-600">🎯 精算</span>
+          <div className="min-w-0 flex-shrink-0">
+            <div className="flex items-center gap-2" title="Ozon 跨境利润精算工作台">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-indigo-100 bg-indigo-50 text-indigo-700 shadow-sm">
+                <WalletCards className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 truncate text-xs font-black tracking-normal text-slate-700">
+                <span className="hidden sm:inline">Ozon 跨境利润精算工作台</span>
+                <span className="sm:hidden">Ozon 精算</span>
+              </span>
+            </div>
           </div>
           
           {/* 右侧：功能聚合 - 扁平紧凑 */}
           <div className="ml-auto flex min-w-0 items-center gap-2 overflow-hidden pr-1 sm:overflow-visible">
             {/* 数据管理下拉菜单 */}
-            <div className="relative">
+            <div className="relative" ref={dataManagementRef}>
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
