@@ -789,17 +789,6 @@ export default function Home() {
   const handleSelectChannel = useCallback((channel: ShippingChannel) => {
     setSelectedChannelId(channel.id);
   }, []);
-  
-  // 🔹 切换渠道收藏
-  const handleToggleFavorite = useCallback((channelId: string) => {
-    setFavoriteChannels(prev => {
-      const newFavorites = prev.includes(channelId)
-        ? prev.filter(id => id !== channelId)
-        : [...prev, channelId];
-      localStorage.setItem("ozon-favorite-channels", JSON.stringify(newFavorites));
-      return newFavorites;
-    });
-  }, []);
 
   // 逆向推价：根据目标利润率反推售价
   const handleReversePriceFromMargin = useCallback((targetMargin: number) => {
@@ -2115,14 +2104,21 @@ export default function Home() {
             
             {/* 🔹 唯一物流列表（唯一物流模块） */}
             {selectedChannel && (
-              <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs shadow-sm">
-                <div className="flex items-center justify-between gap-2">
+              <div className="sticky top-0 z-10 overflow-hidden rounded-lg border-2 border-indigo-400 bg-gradient-to-r from-indigo-600 to-indigo-500 px-3 py-2 text-xs text-white shadow-lg shadow-indigo-200/70">
+                <div className="absolute inset-y-0 left-0 w-1 bg-white/80" aria-hidden="true" />
+                <div className="flex items-center justify-between gap-2 pl-1">
                   <div className="min-w-0">
-                    <div className="font-bold text-indigo-800">当前计算物流：{selectedChannel.thirdParty || "Ozon"} / {selectedChannel.name}</div>
-                    <div className="mt-0.5 truncate text-indigo-600">
+                    <div className="flex items-center gap-1.5 font-black">
+                      <span className="rounded bg-white px-1.5 py-0.5 text-[10px] text-indigo-700">当前计算物流</span>
+                      <span className="truncate">{selectedChannel.thirdParty || "Ozon"} / {selectedChannel.name}</span>
+                    </div>
+                    <div className="mt-1 truncate text-white/85">
                       费用 ¥{(channelCosts.get(selectedChannel.id) ?? 0).toFixed(2)}
                       {selectedBillingInfo?.isVolumetric ? ` · 计抛 ${selectedBillingInfo.billingWeight.toFixed(0)}g` : ` · 实重 ${selectedBillingInfo?.billingWeight?.toFixed(0) || input.weight}g`}
                     </div>
+                  </div>
+                  <div className="shrink-0 rounded-md bg-white/15 px-2 py-1 text-[10px] font-bold ring-1 ring-white/25">
+                    已选中
                   </div>
                 </div>
               </div>
@@ -2160,8 +2156,6 @@ export default function Home() {
                     isSelected={isSelected}
                     onClick={() => handleSelectChannel(channel)}
                     input={input}
-                    isFavorite={favoriteChannels.includes(channel.id)}
-                    onToggleFavorite={handleToggleFavorite}
                   />
                 );
               })}

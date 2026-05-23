@@ -225,6 +225,11 @@ html {
   animation: top-alert-marquee 28s linear infinite;
 }
 
+.top-alert-marquee:hover .top-alert-marquee-track,
+.top-alert-marquee:focus-within .top-alert-marquee-track {
+  animation-play-state: paused;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .top-alert-marquee {
     overflow-x: auto;

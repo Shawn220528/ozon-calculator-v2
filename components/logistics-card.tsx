@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
-import { Battery, Droplets, Ruler, Scale, Star, Timer } from "lucide-react";
+import { Battery, CheckCircle2, Droplets, Ruler, Scale, Star, Timer } from "lucide-react";
 import { ShippingChannel, CalculationInput } from "@/lib/types";
 import { CalculationTrace } from "./mapping-debug-panel";
 
@@ -19,9 +18,6 @@ interface LogisticsCardProps {
   isSelected: boolean;
   onClick: () => void;
   input: CalculationInput;
-  // 🔹 收藏夹功能
-  isFavorite?: boolean;
-  onToggleFavorite?: (channelId: string) => void;
 }
 
 // 格式化函数
@@ -39,15 +35,7 @@ const fPrice = (v: number | undefined | null, currency: "RMB" | "RUB"): string =
   return currency === "RMB" ? v.toFixed(2) : Math.round(v).toLocaleString();
 };
 
-export function LogisticsCard({ channel, cost, billing, isSelected, onClick, input, isFavorite = false, onToggleFavorite }: LogisticsCardProps) {
-  // 🔹 收藏切换回调
-  const handleToggleFavorite = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onToggleFavorite) {
-      onToggleFavorite(channel.id);
-    }
-  }, [channel.id, onToggleFavorite]);
-  
+export function LogisticsCard({ channel, cost, billing, isSelected, onClick, input }: LogisticsCardProps) {
   // 🔴 核心逻辑：直接使用计算引擎的结果，不做本地判定
   const isVolMetric = billing?.isVolumetric ?? false;
   const volWeight = billing?.volumetricWeight || 0;
@@ -96,17 +84,27 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
   return (
     <div 
       onClick={onClick}
-      className={`relative mb-1.5 cursor-pointer rounded-lg border p-2.5 transition-all ${
+      aria-pressed={isSelected}
+      className={`relative mb-1.5 cursor-pointer overflow-hidden rounded-lg border p-2.5 transition-all ${
         !isAvailable 
           ? 'bg-secondary opacity-60 border-border' 
           : isSelected 
-            ? 'bg-indigo-50/50 border-[#6366F1] shadow-md ring-1 ring-[#6366F1]/20' 
-            : 'bg-card hover:shadow-md border-border'
+            ? 'border-indigo-500 bg-indigo-50 shadow-md ring-2 ring-indigo-500/25' 
+            : 'border-border bg-card hover:border-indigo-200 hover:shadow-md'
       }`}
     >
+      {isSelected && (
+        <div className="absolute inset-y-0 left-0 w-1 bg-indigo-600" aria-hidden="true" />
+      )}
       {/* 1. 顶部状态栏：时效 + 计抛强提醒 + Ozon 评级 */}
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <div className="mb-1.5 flex items-center justify-between gap-2 pl-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {isSelected && (
+            <span className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-[10px] font-black text-white shadow-sm">
+              <CheckCircle2 className="h-3 w-3" />
+              当前计算
+            </span>
+          )}
           <span className="inline-flex items-center gap-1 rounded bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
             <Timer className="h-3 w-3" />
             {channel.deliveryTimeMin || 15}-{channel.deliveryTimeMax || 30} 天
@@ -124,25 +122,15 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
             </div>
           )}
         </div>
-        {/* 🔹 收藏按钮 */}
-        {onToggleFavorite && (
-          <button
-            onClick={handleToggleFavorite}
-            className="absolute right-2 top-2 rounded-md p-1 hover:bg-secondary transition-colors"
-            title={isFavorite ? "取消收藏" : "添加到收藏夹"}
-          >
-          <Star className={`h-3.5 w-3.5 ${isFavorite ? "fill-yellow-400 text-yellow-500" : "text-muted-foreground"}`} />
-          </button>
-        )}
         <div className="text-xs text-muted-foreground font-medium">
           评分组: {channel.serviceTier || '-'}
         </div>
       </div>
 
       {/* 2. 标题与价格区 */}
-      <div className="mb-1.5 flex items-start justify-between gap-3">
+      <div className="mb-1.5 flex items-start justify-between gap-3 pl-1">
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-bold leading-tight text-foreground">
+          <h3 className={`truncate text-sm font-bold leading-tight ${isSelected ? "text-indigo-950" : "text-foreground"}`}>
             {channel.name}
           </h3>
           <div className="flex items-center gap-1.5 mt-1">
@@ -152,10 +140,16 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
             <span className="text-[10px] text-muted-foreground">{channel.thirdParty || 'Ozon网络'}</span>
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-lg font-bold leading-5 text-[#6366F1]">
+        <div className={`rounded-md px-2 py-1 text-right ${isSelected ? "bg-white shadow-sm ring-1 ring-indigo-100" : ""}`}>
+          <div className="text-lg font-black leading-5 text-[#6366F1]">
             ¥ {freightData.total.toFixed(2)}
           </div>
+          {isSelected && (
+            <div className="mt-0.5 inline-flex items-center gap-1 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+              <CheckCircle2 className="h-3 w-3" />
+              已选中
+            </div>
+          )}
           {/* 原价仅在计抛时显示 */}
           {showVolumetricLabel && (
             <div className="text-[10px] text-muted-foreground line-through">
@@ -166,7 +160,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
       </div>
 
       {/* 3. 特货属性横条 - 醒目对比 */}
-      <div className="mb-1.5 grid grid-cols-2 gap-1">
+      <div className="mb-1.5 grid grid-cols-2 gap-1 pl-1">
         <div className={`flex items-center justify-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold ${
           limits.allowBattery 
             ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
@@ -186,7 +180,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
       </div>
 
       {/* 4. 限制矩阵 */}
-      <div className="grid grid-cols-2 gap-1 rounded border border-border bg-secondary p-1.5">
+      <div className="ml-1 grid grid-cols-2 gap-1 rounded border border-border bg-secondary p-1.5">
         <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
           <Scale className="h-3 w-3 opacity-70" /> <b className="text-foreground">{limits.minWt}-{fDim(limits.maxWt)}g</b>
         </div>
@@ -205,7 +199,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
       </div>
 
       {/* 5. 计费详情 (默认折叠) - 计费重醒目 - 带动画 */}
-      <details className="group mt-2">
+      <details className="group ml-1 mt-2">
         <summary className="text-[10px] cursor-pointer hover:text-[#6366F1] list-none flex items-center gap-1 select-none font-medium">
           <span className="transition-transform duration-200 group-open:rotate-180">▼</span> 
           <span>查看计费详情 </span>
@@ -266,15 +260,6 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
         </div>
       </details>
 
-      {/* 选中徽章 */}
-      {isSelected && (
-        <div className="absolute -top-2 -right-2 bg-[#6366F1] text-white text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm z-10">
-          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-          </svg>
-          已选
-        </div>
-      )}
     </div>
   );
 }

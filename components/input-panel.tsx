@@ -99,6 +99,22 @@ interface InputPanelProps {
   onCopyOzonPrice?: (label: string, value: string) => void;
 }
 
+type CategorySearchLevel = "一级" | "二级" | "三级";
+
+interface CategorySearchResult {
+  id: string;
+  level: CategorySearchLevel;
+  matchedLevel: CategorySearchLevel;
+  primary: string;
+  secondary: string;
+  tertiary: string;
+  pathLabel: string;
+}
+
+function normalizeCategorySearchText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
 function Section({
   id,
   title,
@@ -143,6 +159,8 @@ function Section({
 export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = 'RMB', currentProfitMargin, onReversePriceFromMargin, marginError, onReset, adRiskControl, shippingData = [], selectedBillingInfo, lockedMargin = null, onToggleMarginLock, suggestedPriceInfo, onCopyOzonPrice }: InputPanelProps) {
   const { getCategories } = useDataHub();
   const categories = useMemo(() => getCategories(), [getCategories]);
+  const [categorySearch, setCategorySearch] = useState("");
+  const [categorySearchFocused, setCategorySearchFocused] = useState(false);
   
   // 🔹 检测物流表功能依赖
   const hasBatteryMapping = useMemo(() => {
@@ -210,6 +228,75 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     const sec = selectedCategory?.secondary.find((item) => item.name === secondary);
     onInputChange({ ...input, secondaryCategory: secondary, tertiaryCategory: sec?.tertiary[0] || "" });
   };
+
+  const categorySearchResults = useMemo<CategorySearchResult[]>(() => {
+    const query = normalizeCategorySearchText(categorySearch.trim());
+    if (!query) return [];
+
+    const results: CategorySearchResult[] = [];
+    const pushResult = (result: CategorySearchResult) => {
+      if (results.length < 20) results.push(result);
+    };
+
+    categories.forEach((cat) => {
+      if (normalizeCategorySearchText(cat.primary).includes(query)) {
+        const firstSecondary = cat.secondary[0];
+        pushResult({
+          id: `primary:${cat.primary}`,
+          level: "一级",
+          matchedLevel: "一级",
+          primary: cat.primary,
+          secondary: firstSecondary?.name || "",
+          tertiary: firstSecondary?.tertiary[0] || "",
+          pathLabel: cat.primary,
+        });
+      }
+
+      cat.secondary.forEach((sec) => {
+        if (normalizeCategorySearchText(sec.name).includes(query)) {
+          pushResult({
+            id: `secondary:${cat.primary}:${sec.name}`,
+            level: "二级",
+            matchedLevel: "二级",
+            primary: cat.primary,
+            secondary: sec.name,
+            tertiary: sec.tertiary[0] || "",
+            pathLabel: `${cat.primary} > ${sec.name}`,
+          });
+        }
+
+        sec.tertiary.forEach((ter) => {
+          if (normalizeCategorySearchText(ter).includes(query)) {
+            pushResult({
+              id: `tertiary:${cat.primary}:${sec.name}:${ter}`,
+              level: "三级",
+              matchedLevel: "三级",
+              primary: cat.primary,
+              secondary: sec.name,
+              tertiary: ter,
+              pathLabel: `${cat.primary} > ${sec.name} > ${ter}`,
+            });
+          }
+        });
+      });
+    });
+
+    return results;
+  }, [categories, categorySearch]);
+
+  const showCategorySearchResults = categorySearchFocused && categorySearch.trim().length > 0;
+
+  const handleCategorySearchSelect = (result: CategorySearchResult) => {
+    onInputChange({
+      ...input,
+      primaryCategory: result.primary,
+      secondaryCategory: result.secondary,
+      tertiaryCategory: result.tertiary,
+    });
+    setCategorySearch("");
+    setCategorySearchFocused(false);
+  };
+
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     product: true,
     cost: true,
@@ -240,6 +327,49 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         defaultOpen
       >
         <div className="space-y-2">
+          <div className="relative space-y-1.5">
+            <Label className="text-xs">类目搜索</Label>
+            <Input
+              type="text"
+              value={categorySearch}
+              onChange={(event) => setCategorySearch(event.target.value)}
+              onFocus={() => setCategorySearchFocused(true)}
+              onBlur={() => setCategorySearchFocused(false)}
+              className="h-8 text-sm"
+              placeholder="搜索一级 / 二级 / 三级类目"
+              autoComplete="off"
+            />
+            {showCategorySearchResults && (
+              <div className="absolute left-0 right-0 top-full z-[60] mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+                {categorySearchResults.length > 0 ? (
+                  <div className="space-y-1">
+                    {categorySearchResults.map((result) => (
+                      <button
+                        key={result.id}
+                        type="button"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          handleCategorySearchSelect(result);
+                        }}
+                        className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-indigo-50 focus:bg-indigo-50 focus:outline-none"
+                      >
+                        <span className="mt-0.5 shrink-0 rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                          {result.level}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-xs font-bold text-slate-800">{result.pathLabel}</span>
+                          <span className="mt-0.5 block text-[10px] text-slate-500">命中{result.matchedLevel}类目，点击代入完整路径</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-2 py-3 text-center text-xs text-slate-500">未找到匹配类目</div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className={`grid gap-2 ${showTertiaryCategory ? "grid-cols-1 xl:grid-cols-3" : "grid-cols-2"}`}>
             <div className="space-y-1.5">
               <Label className="text-xs">一级类目</Label>
