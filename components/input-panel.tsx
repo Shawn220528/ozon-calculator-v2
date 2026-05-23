@@ -161,6 +161,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
   const categories = useMemo(() => getCategories(), [getCategories]);
   const [categorySearch, setCategorySearch] = useState("");
   const [categorySearchFocused, setCategorySearchFocused] = useState(false);
+  const categorySearchInputRef = useRef<HTMLInputElement>(null);
   
   // 🔹 检测物流表功能依赖
   const hasBatteryMapping = useMemo(() => {
@@ -294,7 +295,10 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
       tertiaryCategory: result.tertiary,
     });
     setCategorySearch("");
-    setCategorySearchFocused(false);
+    setCategorySearchFocused(true);
+    window.setTimeout(() => {
+      categorySearchInputRef.current?.focus();
+    }, 0);
   };
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
@@ -330,9 +334,13 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
           <div className="relative space-y-1.5">
             <Label className="text-xs">类目搜索</Label>
             <Input
+              ref={categorySearchInputRef}
               type="text"
               value={categorySearch}
-              onChange={(event) => setCategorySearch(event.target.value)}
+              onChange={(event) => {
+                setCategorySearch(event.target.value);
+                setCategorySearchFocused(true);
+              }}
               onFocus={() => setCategorySearchFocused(true)}
               onBlur={() => setCategorySearchFocused(false)}
               className="h-8 text-sm"
@@ -349,6 +357,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                         type="button"
                         onMouseDown={(event) => {
                           event.preventDefault();
+                        }}
+                        onClick={() => {
                           handleCategorySearchSelect(result);
                         }}
                         className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-indigo-50 focus:bg-indigo-50 focus:outline-none"
