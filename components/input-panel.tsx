@@ -105,6 +105,7 @@ interface CategorySearchResult {
   id: string;
   level: CategorySearchLevel;
   matchedLevel: CategorySearchLevel;
+  matchedLabel: string;
   primary: string;
   secondary: string;
   tertiary: string;
@@ -246,6 +247,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
           id: `primary:${cat.primary}`,
           level: "一级",
           matchedLevel: "一级",
+          matchedLabel: cat.primary,
           primary: cat.primary,
           secondary: firstSecondary?.name || "",
           tertiary: firstSecondary?.tertiary[0] || "",
@@ -259,6 +261,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
             id: `secondary:${cat.primary}:${sec.name}`,
             level: "二级",
             matchedLevel: "二级",
+            matchedLabel: sec.name,
             primary: cat.primary,
             secondary: sec.name,
             tertiary: sec.tertiary[0] || "",
@@ -272,6 +275,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               id: `tertiary:${cat.primary}:${sec.name}:${ter}`,
               level: "三级",
               matchedLevel: "三级",
+              matchedLabel: ter,
               primary: cat.primary,
               secondary: sec.name,
               tertiary: ter,
@@ -348,7 +352,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               autoComplete="off"
             />
             {showCategorySearchResults && (
-              <div className="absolute left-0 right-0 top-full z-[60] mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+              <div className="absolute left-0 top-full z-[60] mt-1 max-h-80 w-[min(42rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
                 {categorySearchResults.length > 0 ? (
                   <div className="space-y-1">
                     {categorySearchResults.map((result) => (
@@ -361,14 +365,19 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                         onClick={() => {
                           handleCategorySearchSelect(result);
                         }}
-                        className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-indigo-50 focus:bg-indigo-50 focus:outline-none"
+                        className="flex w-full items-start gap-2 rounded-md px-2.5 py-2.5 text-left transition-colors hover:bg-indigo-50 focus:bg-indigo-50 focus:outline-none"
                       >
                         <span className="mt-0.5 shrink-0 rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
                           {result.level}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-xs font-bold text-slate-800">{result.pathLabel}</span>
-                          <span className="mt-0.5 block text-[10px] text-slate-500">命中{result.matchedLevel}类目，点击代入完整路径</span>
+                          <span className="block whitespace-normal break-words text-xs font-bold leading-snug text-slate-800">
+                            {result.matchedLabel}
+                          </span>
+                          <span className="mt-1 block whitespace-normal break-words text-[10px] leading-snug text-slate-500">
+                            {result.pathLabel}
+                          </span>
+                          <span className="mt-1 block text-[10px] text-indigo-500">命中{result.matchedLevel}类目，点击代入完整路径</span>
                         </span>
                       </button>
                     ))}
@@ -380,34 +389,34 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
             )}
           </div>
 
-          <div className={`grid gap-2 ${showTertiaryCategory ? "grid-cols-1 xl:grid-cols-3" : "grid-cols-2"}`}>
-            <div className="space-y-1.5">
+          <div className={`grid gap-2 ${showTertiaryCategory ? "grid-cols-1 xl:grid-cols-2" : "grid-cols-2"}`}>
+            <div className={`space-y-1.5 ${showTertiaryCategory ? "xl:col-span-1" : ""}`}>
               <Label className="text-xs">一级类目</Label>
               <Select value={input.primaryCategory} onValueChange={handlePrimaryCategoryChange}>
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger className="h-auto min-h-8 items-start py-1.5 text-left text-sm [&>span]:line-clamp-2 [&>span]:whitespace-normal [&>span]:break-words [&>span]:leading-snug">
                   <SelectValue placeholder="选择一级类目" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="w-[min(28rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)]">
                   {categories.map((cat) => (
-                    <SelectItem key={cat.primary} value={cat.primary}>
+                    <SelectItem key={cat.primary} value={cat.primary} className="whitespace-normal break-words leading-snug">
                       {cat.primary}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
+            <div className={`space-y-1.5 ${showTertiaryCategory ? "xl:col-span-1" : ""}`}>
               <Label className="text-xs">二级类目</Label>
               <Select
                 value={input.secondaryCategory}
                 onValueChange={handleSecondaryCategoryChange}
               >
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger className="h-auto min-h-8 items-start py-1.5 text-left text-sm [&>span]:line-clamp-2 [&>span]:whitespace-normal [&>span]:break-words [&>span]:leading-snug">
                   <SelectValue placeholder="选择二级类目" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="w-[min(38rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)]">
                   {selectedCategory?.secondary.map((sec) => (
-                    <SelectItem key={sec.name} value={sec.name}>
+                    <SelectItem key={sec.name} value={sec.name} className="whitespace-normal break-words leading-snug">
                       {sec.name}
                     </SelectItem>
                   ))}
@@ -415,18 +424,18 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               </Select>
             </div>
             {showTertiaryCategory && (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 xl:col-span-2">
                 <Label className="text-xs">三级类目</Label>
                 <Select
                   value={input.tertiaryCategory || selectedSecondaryCategory?.tertiary[0] || ""}
                   onValueChange={(v) => updateField("tertiaryCategory", v)}
                 >
-                  <SelectTrigger className="h-8 text-sm">
+                  <SelectTrigger className="h-auto min-h-8 items-start py-1.5 text-left text-sm [&>span]:line-clamp-2 [&>span]:whitespace-normal [&>span]:break-words [&>span]:leading-snug">
                     <SelectValue placeholder="选择三级类目" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="w-[min(42rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)]">
                     {selectedSecondaryCategory?.tertiary.map((ter) => (
-                      <SelectItem key={ter} value={ter}>
+                      <SelectItem key={ter} value={ter} className="whitespace-normal break-words leading-snug">
                         {ter}
                       </SelectItem>
                     ))}
