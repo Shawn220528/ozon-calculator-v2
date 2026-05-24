@@ -41,16 +41,7 @@ export function getCommissionRate(
   priceRUB: number,
   fulfillmentMode: FulfillmentMode = "RFBS"
 ): number {
-  const tiers = getCommissionTiersForMode(commission, fulfillmentMode);
-  for (let i = 0; i < tiers.length; i++) {
-    const tier = tiers[i];
-    if (priceRUB >= tier.min && priceRUB <= tier.max) {
-      return tier.rate;
-    }
-  }
-  
-  const fallback = tiers[tiers.length - 1].rate;
-  return fallback;
+  return getCommissionTierForPrice(commission, priceRUB, fulfillmentMode).rate;
 }
 
 export function getCommissionTiersForMode(
@@ -58,6 +49,29 @@ export function getCommissionTiersForMode(
   fulfillmentMode: FulfillmentMode = "RFBS"
 ): CommissionTier[] {
   return commission.modeTiers?.[fulfillmentMode] || commission.modeTiers?.RFBS || commission.tiers;
+}
+
+export function normalizeCommissionPriceRUB(priceRUB: number): number {
+  if (!Number.isFinite(priceRUB)) return 0;
+  return Math.round((priceRUB + Number.EPSILON) * 100) / 100;
+}
+
+export function getCommissionTierForPrice(
+  commission: CategoryCommission,
+  priceRUB: number,
+  fulfillmentMode: FulfillmentMode = "RFBS"
+): CommissionTier {
+  const tiers = getCommissionTiersForMode(commission, fulfillmentMode);
+  const normalizedPriceRUB = normalizeCommissionPriceRUB(priceRUB);
+
+  for (const tier of tiers) {
+    if (normalizedPriceRUB >= tier.min && normalizedPriceRUB <= tier.max) {
+      return tier;
+    }
+  }
+
+  const sortedTiers = [...tiers].sort((a, b) => a.min - b.min);
+  return sortedTiers.find((tier) => normalizedPriceRUB <= tier.max) || sortedTiers[sortedTiers.length - 1];
 }
 
 /**
@@ -366,13 +380,9 @@ export function validatePriceForTier(
 ): { valid: boolean; tier: number; rate: number; priceRUB: number } {
   const priceRUB = cnyToRub(priceRMB, exchangeRate);
   const tiers = getCommissionTiersForMode(commission, fulfillmentMode);
-  for (let i = 0; i < tiers.length; i++) {
-    const tier = tiers[i];
-    if (priceRUB >= tier.min && priceRUB <= tier.max) {
-      return { valid: true, tier: i, rate: tier.rate, priceRUB };
-    }
-  }
-  return { valid: false, tier: -1, rate: 0, priceRUB };
+  const matchedTier = getCommissionTierForPrice(commission, priceRUB, fulfillmentMode);
+  const tierIndex = tiers.indexOf(matchedTier);
+  return { valid: tierIndex >= 0, tier: tierIndex, rate: matchedTier.rate, priceRUB: normalizeCommissionPriceRUB(priceRUB) };
 }
 
 /**
@@ -578,9 +588,9 @@ export function calculatePricingStrategies(
       // 逆向求 P_rmb
       const P_rmb = (totalFixedCost + targetProfit) / M;
       // 转换为 P_rub 验证是否在当前阶梯区间
-      const P_rub = cnyToRub(P_rmb, exchangeRate);
+      const matchedTier = getCommissionTierForPrice(commission, cnyToRub(P_rmb, exchangeRate), fulfillmentMode);
 
-      if (P_rub >= tier.min && P_rub <= tier.max) {
+      if (matchedTier === tier) {
         validPriceRMB = Math.min(validPriceRMB, P_rmb);
       }
     }
@@ -1020,6 +1030,7 @@ export function detectCommissionTierBoundary(
   lowerPriceRMB?: number;
   profitIncrease?: number;
 } {
+  const normalizedPriceRUB = normalizeCommissionPriceRUB(priceRUB);
   const tiers = getCommissionTiersForMode(commission, fulfillmentMode);
   const boundaries = tiers
     .map((tier) => tier.max)
@@ -1032,14 +1043,14 @@ export function detectCommissionTierBoundary(
     const upperBound = boundary * 1.02;
     
     // 检测是否在边界附近
-    if (priceRUB >= lowerBound && priceRUB <= upperBound) {
+    if (normalizedPriceRUB >= lowerBound && normalizedPriceRUB <= upperBound) {
       // 当前售价在边界附近，计算降价到边界以下的利润
       const targetPriceRUB = boundary - 1; // 降到边界以下 1 RUB
       const targetPriceRMB = rubToCny(targetPriceRUB, exchangeRate);
       
       // 计算降价后的佣金率
       const lowerCommissionRate = getCommissionRate(commission, targetPriceRUB, fulfillmentMode);
-      const currentCommissionRate = getCommissionRate(commission, priceRUB, fulfillmentMode);
+      const currentCommissionRate = getCommissionRate(commission, normalizedPriceRUB, fulfillmentMode);
       
       // 如果降价后佣金率更低
       if (lowerCommissionRate < currentCommissionRate) {
@@ -1048,7 +1059,7 @@ export function detectCommissionTierBoundary(
         
         if (M_lower > 0 && M_current > 0) {
           const profitLower = calculateNetProfit(targetPriceRMB, M_lower, totalFixedCost);
-          const currentPriceRMB = rubToCny(priceRUB, exchangeRate);
+          const currentPriceRMB = rubToCny(normalizedPriceRUB, exchangeRate);
           const profitCurrent = calculateNetProfit(currentPriceRMB, M_current, totalFixedCost);
           
           if (profitLower > profitCurrent) {

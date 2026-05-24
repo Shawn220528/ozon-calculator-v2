@@ -45,6 +45,8 @@ const {
   calculateSuggestedPrice,
   calculateCpcCost,
   performFullCalculation,
+  getCommissionRate,
+  normalizeCommissionPriceRUB,
   reversePriceFromMargin,
 } = loadTsModule(path.join("lib", "calculator.ts"));
 
@@ -249,6 +251,24 @@ const suggestionCommission = {
     { min: 5000.01, max: Infinity, rate: 20 },
   ],
 };
+
+const petCarryBagCommission = {
+  primaryCategory: "宠物用品",
+  secondaryCategory: "宠物便携包",
+  tiers: [
+    { min: 0, max: 1500, rate: 12 },
+    { min: 1500.01, max: 5000, rate: 14 },
+    { min: 5000.01, max: Infinity, rate: 15 },
+  ],
+};
+assertEqual(normalizeCommissionPriceRUB(1500.000000001), 1500, "commission price should normalize tiny float noise at 1500");
+assertEqual(normalizeCommissionPriceRUB(5000.000000001), 5000, "commission price should normalize tiny float noise at 5000");
+assertEqual(getCommissionRate(petCarryBagCommission, 1500), 12, "1500 RUB should use first commission tier");
+assertEqual(getCommissionRate(petCarryBagCommission, 1500.000000001), 12, "1500 RUB float noise should still use first commission tier");
+assertEqual(getCommissionRate(petCarryBagCommission, 1500.01), 14, "1500.01 RUB should use second commission tier");
+assertEqual(getCommissionRate(petCarryBagCommission, 5000), 14, "5000 RUB should use second commission tier");
+assertEqual(getCommissionRate(petCarryBagCommission, 5000.000000001), 14, "5000 RUB float noise should still use second commission tier");
+assertEqual(getCommissionRate(petCarryBagCommission, 5000.01), 15, "5000.01 RUB should use third commission tier");
 
 const fallbackSuggestion = calculateSuggestedPrice([baseSuggestionChannel], 12, "RMB");
 assertEqual(fallbackSuggestion.suggestedPriceRMB, 10, "suggested price falls back to logistics threshold without commission");
