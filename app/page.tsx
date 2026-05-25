@@ -390,8 +390,21 @@ export default function Home() {
   // 🔹 利润率锁定状态：null=未锁定, 数字=锁定的利润率值(%)
   const [lockedMargin, setLockedMargin] = useState<number | null>(null);
   
-  // 🔹 致命错误诊断面板显
+  // 🔹 致命错误诊断面板
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  
+  // 🔹 诊断通栏折叠状态（持久化）
+  const [diagnosticBarCollapsed, setDiagnosticBarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem("diagnostic-bar-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem("diagnostic-bar-collapsed", String(diagnosticBarCollapsed));
+  }, [diagnosticBarCollapsed]);
   
   // 🔹 ESC 键关闭诊断面板
   useEffect(() => {
@@ -1913,16 +1926,40 @@ export default function Home() {
         </div>
       )}
       
-      {/* 🔹 全局诊断通栏 - 横跨全屏，自适应滚动，去重渲染 */}
+      {/* 🔹 全局诊断通栏 - 无阻断时可折叠 */}
       <div 
         id="global-diagnostic-bar"
-        className="mx-auto flex h-9 w-full max-w-[1480px] items-center justify-start overflow-hidden border-b border-slate-200 bg-slate-50 px-3 py-1 md:justify-center"
-        style={{ 
-          minHeight: '36px',
-          overflowY: 'hidden'
+        className={`mx-auto flex w-full max-w-[1480px] items-center overflow-hidden border-b border-slate-200 bg-slate-50 px-3 transition-all duration-200 ${
+          diagnosticBarCollapsed && topAlerts.length === 0
+            ? "h-1 cursor-pointer hover:bg-slate-200"
+            : "h-9 py-1"
+        }`}
+        style={{ minHeight: diagnosticBarCollapsed && topAlerts.length === 0 ? '4px' : '36px' }}
+        onClick={() => {
+          if (diagnosticBarCollapsed && topAlerts.length === 0) {
+            setDiagnosticBarCollapsed(false);
+          }
         }}
       >
-        <TopAlertBar items={topAlerts} onDismiss={handleDismissTopAlert} />
+        {diagnosticBarCollapsed && topAlerts.length === 0 ? (
+          <div className="flex w-full items-center justify-center">
+            <span className="text-[9px] text-slate-300">•</span>
+          </div>
+        ) : (
+          <>
+            <TopAlertBar items={topAlerts} onDismiss={handleDismissTopAlert} />
+            {topAlerts.length === 0 && (
+              <button
+                type="button"
+                onClick={() => setDiagnosticBarCollapsed(true)}
+                className="ml-auto text-[10px] text-slate-400 hover:text-slate-600 shrink-0"
+                title="折叠诊断栏"
+              >
+                ✕
+              </button>
+            )}
+          </>
+        )}
 
         {showDiagnostic && (
           <>
@@ -1979,25 +2016,32 @@ export default function Home() {
       {/* 🔹 主内容区 - 四区紧凑经营工作台 */}
       <main className="mx-auto flex-1 w-full max-w-[1480px] overflow-y-auto px-3 py-2 xl:overflow-hidden">
         <section className="-mx-3 mb-2 flex min-h-14 flex-wrap items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-          {[
+          {([
             { label: "净利", value: `¥${result.netProfit.toFixed(1)}`, className: getFinanceTextClass(result.netProfit), important: true },
             { label: "ROI", value: `${result.roi.toFixed(1)}%`, className: getFinanceTextClass(result.roi), important: true },
             { label: "利润率", value: `${result.profitMargin.toFixed(1)}%`, className: getFinanceTextClass(result.profitMargin), important: true },
+          ] as const).map((item) => (
+            <div
+              key={item.label}
+              className="flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] px-3 min-w-[120px]"
+            >
+              <span className="text-[11px] font-semibold text-slate-500">{item.label}</span>
+              <span className={`text-xl font-black leading-none tabular-nums ${item.className}`}>{item.value}</span>
+            </div>
+          ))}
+          <div className="mx-1 h-8 w-px bg-slate-200 shrink-0 hidden sm:block" />
+          {([
             { label: "总成本", value: `¥${result.costs.total.toFixed(1)}`, className: "text-slate-800" },
             { label: "佣金", value: `¥${result.costs.commission.toFixed(1)} (${result.commissionRate}%)`, className: "text-slate-800" },
             { label: "售价", value: `¥${input.targetPriceRMB.toFixed(0)}`, className: "text-indigo-700" },
             { label: "可发渠道", value: `${shippingChannels.available.length}/${shippingChannels.available.length + shippingChannels.unavailable.length}`, className: shippingChannels.available.length > 0 ? "text-emerald-700" : "text-red-700" },
-          ].map((item) => (
+          ] as const).map((item) => (
             <div
               key={item.label}
-              className={`flex h-11 items-center justify-center gap-2 rounded-lg border px-3 ${
-                item.important
-                  ? "min-w-[132px] border-slate-200 bg-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]"
-                  : "min-w-[104px] border-transparent bg-white"
-              }`}
+              className="flex h-9 items-center justify-center gap-1.5 rounded-lg px-2.5"
             >
-              <span className="text-[11px] font-semibold text-slate-500">{item.label}</span>
-              <span className={`${item.important ? "text-xl" : "text-base"} font-black leading-none tabular-nums ${item.className}`}>{item.value}</span>
+              <span className="text-[10px] font-medium text-slate-400">{item.label}</span>
+              <span className={`text-sm font-bold leading-none tabular-nums ${item.className}`}>{item.value}</span>
             </div>
           ))}
         </section>
@@ -2293,17 +2337,28 @@ export default function Home() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <select
-                value={batchSortMode}
-                onChange={(event) => setBatchSortMode(event.target.value as BatchSortMode)}
-                className="h-7 rounded border border-slate-200 bg-white px-2 text-xs text-slate-600"
-              >
-                <option value="profit">按净利</option>
-                <option value="roi">按 ROI</option>
-                <option value="risk">按风险</option>
-                <option value="available">按可发渠道</option>
-                <option value="volumetric">按计抛</option>
-              </select>
+              <div className="flex h-7 items-center rounded-md border border-slate-200 bg-slate-50 p-0.5">
+                {[
+                  { key: "profit" as BatchSortMode, label: "净利" },
+                  { key: "roi" as BatchSortMode, label: "ROI" },
+                  { key: "risk" as BatchSortMode, label: "风险" },
+                  { key: "available" as BatchSortMode, label: "渠道" },
+                  { key: "volumetric" as BatchSortMode, label: "计抛" },
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setBatchSortMode(key)}
+                    className={`h-6 rounded px-2 text-[11px] font-bold transition-colors ${
+                      batchSortMode === key
+                        ? "bg-white text-indigo-700 shadow-sm border border-slate-200"
+                        : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 onClick={handleExportBatchResults}
@@ -2345,7 +2400,13 @@ export default function Home() {
                     </thead>
                     <tbody>
                       {successfulBatchResults.slice(0, 20).map((item) => (
-                        <tr key={`success-${item.rowIndex}`} className="border-t">
+                        <tr key={`success-${item.rowIndex}`} className={`border-t transition-colors hover:bg-slate-50 ${
+                          (item.netProfit ?? 0) < 0
+                            ? "bg-red-50/40"
+                            : (item.roi ?? 0) < 10
+                              ? "bg-amber-50/30"
+                              : ""
+                        }`}>
                           <td className="p-2 font-medium text-slate-700">#{item.rowIndex} {item.sku || ""}</td>
                           <td className="p-2 text-slate-600">{item.input.secondaryCategory}</td>
                           <td className={`p-2 text-right font-bold ${getFinanceTextClass(item.netProfit)}`}>¥{(item.netProfit ?? 0).toFixed(2)}</td>

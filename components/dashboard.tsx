@@ -132,7 +132,19 @@ export function Dashboard({
 }: DashboardProps) {
   const E = input.exchangeRate; // CNY/RUB (1 CNY = X RUB)
   const [advisorExpanded, setAdvisorExpanded] = useState(true);
-  const [chartsExpanded, setChartsExpanded] = useState(false);
+  const [chartsExpanded, setChartsExpanded] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const saved = localStorage.getItem("dashboard-charts-expanded");
+      return saved === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("dashboard-charts-expanded", String(chartsExpanded));
+  }, [chartsExpanded]);
   const [pendingSelectedTier, setPendingSelectedTier] = useState<{ index: number; priceRMB: number } | null>(null);
 
   // ====== 客户端渲染标记 ======
@@ -614,12 +626,12 @@ export function Dashboard({
               <span className="font-bold text-slate-700">售价构成占比</span>
               <span className="text-slate-500">售价：¥{input.targetPriceRMB.toFixed(2)}</span>
             </div>
-            <div className="flex h-11 overflow-hidden rounded-lg bg-slate-100">
+            <div className="flex h-14 overflow-hidden rounded-lg bg-slate-100">
               {costSegments.map((segment) => (
                 <div
                   key={segment.label}
-                  className="flex items-center justify-center text-[11px] font-black text-white"
-                  style={{ width: `${Math.max(segment.percent, 4)}%`, backgroundColor: segment.color }}
+                  className="flex items-center justify-center text-[11px] font-black text-white transition-all duration-150 hover:brightness-110 hover:scale-y-[1.04] hover:shadow-lg relative"
+                  style={{ width: `${Math.max(segment.percent, 4)}%`, backgroundColor: segment.color, zIndex: segment.label === "净利润" ? 1 : 0 }}
                   title={`${segment.label} ${segment.percent.toFixed(1)}%`}
                 >
                   {segment.percent >= 4 ? `${segment.percent.toFixed(1)}%` : ""}

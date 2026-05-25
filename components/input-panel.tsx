@@ -315,12 +315,20 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     }, 0);
   };
 
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    product: true,
-    cost: true,
-    ads: true,
-    pricing: true,
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    if (typeof window === "undefined") return { product: true, cost: true, ads: true, pricing: true };
+    try {
+      const saved = localStorage.getItem("input-panel-sections");
+      return saved ? JSON.parse(saved) : { product: true, cost: true, ads: true, pricing: true };
+    } catch {
+      return { product: true, cost: true, ads: true, pricing: true };
+    }
   });
+
+  // 🔹 持久化折叠状态
+  useEffect(() => {
+    localStorage.setItem("input-panel-sections", JSON.stringify(openSections));
+  }, [openSections]);
 
   const ozonPricing = useMemo(
     () => calculateOzonBackendPricing(input.targetPriceRMB, input.exchangeRate),
