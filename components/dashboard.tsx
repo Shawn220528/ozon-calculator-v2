@@ -525,7 +525,8 @@ export function Dashboard({
       { label: "采购成本", value: result.costs.purchase + result.costs.domesticShipping + result.costs.packaging, color: "#5B5CF6" },
       { label: "物流费用", value: result.costs.internationalShipping, color: "#F59E0B" },
       { label: "平台佣金", value: result.costs.commission, color: "#10B981" },
-      { label: "支付手续费", value: result.costs.paymentFee + result.costs.withdrawalFee, color: "#8B5CF6" },
+      { label: "支付手续费", value: result.costs.paymentFee, color: "#8B5CF6" },
+      { label: "提现手续费", value: result.costs.withdrawalFee, color: "#06B6D4" },
       { label: "退损预估", value: result.costs.returnCost, color: "#F97316" },
       { label: "广告费用", value: result.costs.cpaCost + result.costs.cpcCost, color: "#3B82F6" },
     ].filter((item) => item.value > 0);
@@ -607,7 +608,7 @@ export function Dashboard({
             <span className={`rounded-md border px-2 py-1 text-xs font-black ${verdict.className}`}>{verdict.label}</span>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3 px-4 pb-4 xl:grid-cols-2">
+        <CardContent className="grid gap-3 px-4 pb-4">
           <div className="rounded-xl border border-slate-200 bg-white p-3">
             <div className="mb-3 flex items-center justify-between text-xs">
               <span className="font-bold text-slate-700">售价构成占比</span>
@@ -651,33 +652,6 @@ export function Dashboard({
             )}
             <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
               各项成本及利润占售价的百分比。成本合计已包含采购、物流、佣金、手续费、退损、广告等。
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-700">利润敏感性分析</span>
-              <span className="text-slate-500">当前汇率：1 CNY = {input.exchangeRate.toFixed(2)} RUB</span>
-            </div>
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height={220} minWidth={260}>
-                <LineChart data={sensitivityData} margin={{ left: 4, right: 12, top: 16, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#64748b" }} />
-                  <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(value) => `¥${value}`} />
-                  <RechartsTooltip
-                    formatter={(value) => [`¥${Number(value).toFixed(2)}`, "利润"]}
-                    labelFormatter={(label, payload) => {
-                      const row = payload?.[0]?.payload as { rate?: number; priceRMB?: number } | undefined;
-                      return row ? `${label} | 1 CNY = ${row.rate?.toFixed(2)} RUB | 回款 ¥${row.priceRMB?.toFixed(2)}` : String(label);
-                    }}
-                    contentStyle={{ fontSize: 12 }}
-                  />
-                  <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
-                  <ReferenceLine x="当前" stroke="#94a3b8" strokeDasharray="3 3" />
-                  <Line type="monotone" dataKey="value" stroke="#5B5CF6" strokeWidth={3} dot={{ r: 4, fill: "#fff", strokeWidth: 2 }} />
-                </LineChart>
-              </ResponsiveContainer>
             </div>
           </div>
         </CardContent>
@@ -868,6 +842,32 @@ export function Dashboard({
             <CardTitle className="text-base font-black text-slate-800">汇率风险测试 <span className="text-xs font-medium text-slate-400">（1 CNY = N RUB）</span></CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 px-4 pb-4 text-sm">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-700">利润敏感性分析</span>
+                <span className="text-slate-500">当前汇率：1 CNY = {input.exchangeRate.toFixed(2)} RUB</span>
+              </div>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height={180} minWidth={200}>
+                  <LineChart data={sensitivityData} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} />
+                    <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickFormatter={(value) => `¥${value}`} />
+                    <RechartsTooltip
+                      formatter={(value) => [`¥${Number(value).toFixed(2)}`, "利润"]}
+                      labelFormatter={(label, payload) => {
+                        const row = payload?.[0]?.payload as { rate?: number; priceRMB?: number } | undefined;
+                        return row ? `${label} | 1 CNY = ${row.rate?.toFixed(2)} RUB | 回款 ¥${row.priceRMB?.toFixed(2)}` : String(label);
+                      }}
+                      contentStyle={{ fontSize: 11 }}
+                    />
+                    <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
+                    <ReferenceLine x="当前" stroke="#94a3b8" strokeDasharray="3 3" />
+                    <Line type="monotone" dataKey="value" stroke="#5B5CF6" strokeWidth={2.5} dot={{ r: 3, fill: "#fff", strokeWidth: 2 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
             {exchangeRiskRows.map((row) => (
               <div
                 key={row.worsenPercent}
