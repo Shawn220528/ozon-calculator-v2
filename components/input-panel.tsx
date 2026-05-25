@@ -116,6 +116,16 @@ function normalizeCategorySearchText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, "");
 }
 
+function numberInputValue(value: number | null | undefined): number | "" {
+  return value === null || value === undefined || Number.isNaN(value) ? "" : value;
+}
+
+function optionalNumberInputValue(value: string): number | null {
+  if (value === "") return null;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function Section({
   id,
   title,
@@ -572,7 +582,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 type="number"
                 min="0"
                 step="0.01"
-                value={input.purchaseCost || ""}
+                value={numberInputValue(input.purchaseCost)}
                 onChange={(e) => updateField("purchaseCost", parseFloat(e.target.value) || 0)}
                 className="h-8 text-sm"
               />
@@ -583,7 +593,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 type="number"
                 min="0"
                 step="0.01"
-                value={input.domesticShipping || ""}
+                value={numberInputValue(input.domesticShipping)}
                 onChange={(e) => updateField("domesticShipping", parseFloat(e.target.value) || 0)}
                 className="h-8 text-sm"
               />
@@ -594,7 +604,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 type="number"
                 min="0"
                 step="0.01"
-                value={input.packagingFee || ""}
+                value={numberInputValue(input.packagingFee)}
                 onChange={(e) => updateField("packagingFee", parseFloat(e.target.value) || 0)}
                 className="h-8 text-sm"
               />
@@ -606,7 +616,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 min="0"
                 max="100"
                 step="0.1"
-                value={input.paymentFee || ""}
+                value={numberInputValue(input.paymentFee)}
                 onChange={(e) => updateField("paymentFee", parseFloat(e.target.value) || 0)}
                 className="h-8 text-sm"
               />
@@ -623,7 +633,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   min="0"
                   max="100"
                   step="0.5"
-                  value={input.returnRate || ""}
+                  value={numberInputValue(input.returnRate)}
                   onChange={(e) => updateField("returnRate", parseFloat(e.target.value) || 0)}
                   className="h-8 text-sm"
                 />
@@ -684,7 +694,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   min="0"
                   max="100"
                   step="0.5"
-                  value={input.cpaRate || ""}
+                  value={numberInputValue(input.cpaRate)}
                   onChange={(e) => updateField("cpaRate", parseFloat(e.target.value) || 0)}
                   className="w-20 h-8 text-sm"
                   disabled={!input.cpaEnabled}
@@ -753,7 +763,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                       min="0"
                       max="100"
                       step="0.1"
-                      value={input.cpcSalesPercent || ""}
+                      value={numberInputValue(input.cpcSalesPercent)}
                       onChange={(e) => updateField("cpcSalesPercent", parseFloat(e.target.value) || 0)}
                       className="h-8 text-sm"
                       disabled={!input.cpcEnabled}
@@ -771,7 +781,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                         type="number"
                         min="0"
                         step="0.1"
-                        value={input.cpcBid || ""}
+                        value={numberInputValue(input.cpcBid)}
                         onChange={(e) => updateField("cpcBid", parseFloat(e.target.value) || 0)}
                         className="h-8 text-sm pl-6"
                         disabled={!input.cpcEnabled}
@@ -785,7 +795,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                       min="0"
                       max="100"
                       step="0.1"
-                      value={input.cpcConversionRate || ""}
+                      value={numberInputValue(input.cpcConversionRate)}
                       onChange={(e) => updateField("cpcConversionRate", parseFloat(e.target.value) || 0)}
                       className="h-8 text-sm"
                       disabled={!input.cpcEnabled}
@@ -919,7 +929,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   type="number"
                   min="0"
                   step="1"
-                  value={input.targetPriceRMB || ""}
+                  value={numberInputValue(input.targetPriceRMB)}
                   onChange={(e) => {
                     const val = e.target.value;
                     if (val === "" || val === "-") {
@@ -1141,7 +1151,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                 type="number"
                 min="0"
                 step="0.01"
-                value={rivalPrice || ""}
+                value={numberInputValue(rivalPrice)}
                 onChange={(e) => updateField("rivalPrice", parseFloat(e.target.value) || 0)}
                 className="h-8 text-sm flex-1"
                 placeholder="输入竞品售价"
@@ -1209,7 +1219,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               max="99"
               step="1"
               value={input.profitWarningThreshold !== null && input.profitWarningThreshold !== undefined ? input.profitWarningThreshold : ""}
-              onChange={(e) => updateField("profitWarningThreshold", e.target.value === "" ? null : parseFloat(e.target.value) || null)}
+              onChange={(e) => updateField("profitWarningThreshold", optionalNumberInputValue(e.target.value))}
               className="h-8 text-sm"
               placeholder="留空关闭预警"
             />
@@ -1226,7 +1236,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               min="0"
               max="99"
               step="1"
-              value={input.promotionDiscount || ""}
+              value={numberInputValue(input.promotionDiscount)}
               onChange={(e) => updateField("promotionDiscount", parseFloat(e.target.value) || 0)}
               className="h-8 text-sm"
             />
@@ -1281,7 +1291,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   min="0"
                   max="100"
                   step="0.1"
-                  value={input.vatRate || ""}
+                  value={numberInputValue(input.vatRate)}
                   onChange={(e) => updateField("vatRate", parseFloat(e.target.value) || 0)}
                   className="h-8 text-sm"
                   disabled={!input.taxEnabled}
@@ -1294,7 +1304,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
                   min="0"
                   max="100"
                   step="0.1"
-                  value={input.corporateTaxRate || ""}
+                  value={numberInputValue(input.corporateTaxRate)}
                   onChange={(e) => updateField("corporateTaxRate", parseFloat(e.target.value) || 0)}
                   className="h-8 text-sm"
                   disabled={!input.taxEnabled}
