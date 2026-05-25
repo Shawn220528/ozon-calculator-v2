@@ -98,8 +98,6 @@ interface DashboardProps {
   onApplyPrice?: (priceRMB: number) => void;
 }
 
-const COST_COLORS = ["#6366F1", "#F59E0B", "#8B5CF6", "#EF4444", "#10B981", "#EC4899"];
-
 function getFinanceTextClass(value: number | undefined | null): string {
   if (value === undefined || value === null || Number.isNaN(value)) {
     return "text-slate-700";
@@ -523,17 +521,21 @@ export function Dashboard({
   const isBelowTargetProfitAfterAds = !result.adRiskControl?.isOverBudget && targetProfitAdRoom < 0;
 
   const costSegments = useMemo(() => {
-    const items = [
+    const baseItems = [
       { label: "采购成本", value: result.costs.purchase + result.costs.domesticShipping + result.costs.packaging, color: "#5B5CF6" },
       { label: "物流费用", value: result.costs.internationalShipping, color: "#F59E0B" },
-      { label: "平台佣金", value: result.costs.commission, color: "#3B82F6" },
-      { label: "支付手续费", value: result.costs.paymentFee + result.costs.withdrawalFee, color: "#22C55E" },
-      { label: "退损预估", value: result.costs.returnCost, color: "#EC4899" },
-      { label: "广告费用", value: result.costs.cpaCost + result.costs.cpcCost, color: "#8B5CF6" },
+      { label: "平台佣金", value: result.costs.commission, color: "#10B981" },
+      { label: "支付手续费", value: result.costs.paymentFee + result.costs.withdrawalFee, color: "#8B5CF6" },
+      { label: "退损预估", value: result.costs.returnCost, color: "#F97316" },
+      { label: "广告费用", value: result.costs.cpaCost + result.costs.cpcCost, color: "#3B82F6" },
     ].filter((item) => item.value > 0);
-    const total = items.reduce((sum, item) => sum + item.value, 0) || 1;
-    return items.map((item) => ({ ...item, percent: (item.value / total) * 100 }));
-  }, [result.costs]);
+    const denominator = input.targetPriceRMB || 1;
+    const items = baseItems.map((item) => ({ ...item, percent: (item.value / denominator) * 100 }));
+    if (result.netProfit >= 0) {
+      items.push({ label: "净利润", value: result.netProfit, color: "#EF4444", percent: (result.netProfit / denominator) * 100 });
+    }
+    return items;
+  }, [result.costs, input.targetPriceRMB, result.netProfit]);
 
   const sensitivityData = useMemo(() => {
     return [-15, -10, -5, 0, 5, 10, 15].map((percent) => {
@@ -608,7 +610,7 @@ export function Dashboard({
         <CardContent className="grid gap-3 px-4 pb-4 xl:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-3">
             <div className="mb-3 flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-700">成本结构占比</span>
+              <span className="font-bold text-slate-700">售价构成占比</span>
               <span className="text-slate-500">售价：¥{input.targetPriceRMB.toFixed(2)}</span>
             </div>
             <div className="flex h-11 overflow-hidden rounded-lg bg-slate-100">
@@ -619,25 +621,36 @@ export function Dashboard({
                   style={{ width: `${Math.max(segment.percent, 4)}%`, backgroundColor: segment.color }}
                   title={`${segment.label} ${segment.percent.toFixed(1)}%`}
                 >
-                  {segment.percent >= 9 ? `${segment.percent.toFixed(1)}%` : ""}
+                  {segment.percent >= 4 ? `${segment.percent.toFixed(1)}%` : ""}
                 </div>
               ))}
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
               {costSegments.map((segment) => (
                 <div key={segment.label} className="flex items-center gap-2 text-[11px] text-slate-600">
-                  <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: segment.color }} />
-                  <span>{segment.label}</span>
-                  <b className="ml-auto">¥{segment.value.toFixed(2)}</b>
+                  <span className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ backgroundColor: segment.color }} />
+                  <span className="truncate">{segment.label}</span>
+                  <b className="ml-auto whitespace-nowrap">¥{segment.value.toFixed(2)}<span className="text-[10px] text-slate-400"> ({segment.percent.toFixed(1)}%)</span></b>
                 </div>
               ))}
             </div>
-            <div className="mt-4 inline-flex rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+            <div className="mt-4 inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+              <span className="text-slate-500">售价：</span>
+              <b className="text-slate-800">¥{input.targetPriceRMB.toFixed(2)}</b>
+              <span className="mx-2 text-slate-300">|</span>
               <span className="text-slate-500">总成本：</span>
               <b className="text-slate-800">¥{result.costs.total.toFixed(2)}</b>
+              <span className="mx-2 text-slate-300">|</span>
+              <span className="text-slate-500">净利润：</span>
+              <b className={result.netProfit >= 0 ? "text-red-600" : "text-emerald-600"}>¥{result.netProfit.toFixed(2)}</b>
             </div>
+            {result.netProfit < 0 && (
+              <div className="mt-1 text-[11px] text-emerald-600 font-medium">
+                ⚠ 当前售价低于总成本，亏损 ¥{Math.abs(result.netProfit).toFixed(2)}
+              </div>
+            )}
             <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
-              总成本已包含采购、物流、佣金、手续费、退损、广告等成本项。
+              各项成本及利润占售价的百分比。成本合计已包含采购、物流、佣金、手续费、退损、广告等。
             </div>
           </div>
 

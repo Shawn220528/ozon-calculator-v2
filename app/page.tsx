@@ -1984,6 +1984,7 @@ export default function Home() {
             { label: "ROI", value: `${result.roi.toFixed(1)}%`, className: getFinanceTextClass(result.roi), important: true },
             { label: "利润率", value: `${result.profitMargin.toFixed(1)}%`, className: getFinanceTextClass(result.profitMargin), important: true },
             { label: "总成本", value: `¥${result.costs.total.toFixed(1)}`, className: "text-slate-800" },
+            { label: "佣金", value: `¥${result.costs.commission.toFixed(1)} (${result.commissionRate}%)`, className: "text-slate-800" },
             { label: "售价", value: `¥${input.targetPriceRMB.toFixed(0)}`, className: "text-indigo-700" },
             { label: "可发渠道", value: `${shippingChannels.available.length}/${shippingChannels.available.length + shippingChannels.unavailable.length}`, className: shippingChannels.available.length > 0 ? "text-emerald-700" : "text-red-700" },
           ].map((item) => (
