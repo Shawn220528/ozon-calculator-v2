@@ -2023,7 +2023,7 @@ export default function Home() {
           ] as const).map((item) => (
             <div
               key={item.label}
-              className="flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] px-3 min-w-[120px]"
+              className="flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] px-3 min-w-0 sm:min-w-[120px]"
             >
               <span className="text-[11px] font-semibold text-slate-500">{item.label}</span>
               <span className={`text-xl font-black leading-none tabular-nums ${item.className}`}>{item.value}</span>
@@ -2072,7 +2072,7 @@ export default function Home() {
           </div>
 
           {/* 中间财务看板 */}
-          <div className="col-span-1 min-h-0 overflow-y-visible pr-1 scrollbar-thin xl:overflow-y-auto">
+          <div className="col-span-1 min-h-0 overflow-y-visible pr-1 scrollbar-thin xl:overflow-y-auto xl:max-h-[calc(100vh-9.25rem)]">
             <Dashboard
               result={result}
               input={input}
@@ -2107,7 +2107,7 @@ export default function Home() {
                 </span>
               </div>
               {/* 物流多选筛选 */}
-              <div className="flex flex-wrap gap-1">
+              <div className="flex w-full flex-wrap gap-0.5 sm:gap-1">
                 <Button
                   type="button"
                   size="xs"
@@ -2196,9 +2196,9 @@ export default function Home() {
               </div>
             </div>
             
-            {/* 🔹 唯一物流列表（唯一物流模块） */}
+              {/* 🔹 唯一物流列表（唯一物流模块） */}
             {selectedChannel && (
-              <div className="sticky top-0 z-10 overflow-hidden rounded-lg border-2 border-indigo-400 bg-gradient-to-r from-indigo-600 to-indigo-500 px-3 py-2 text-xs text-white shadow-lg shadow-indigo-200/70">
+              <div className="overflow-hidden rounded-lg border-2 border-indigo-400 bg-gradient-to-r from-indigo-600 to-indigo-500 px-3 py-2 text-xs text-white shadow-lg shadow-indigo-200/70 sticky top-0 z-10">
                 <div className="absolute inset-y-0 left-0 w-1 bg-white/80" aria-hidden="true" />
                 <div className="flex items-center justify-between gap-2 pl-1">
                   <div className="min-w-0">
@@ -2385,11 +2385,13 @@ export default function Home() {
               <div>
                 <div className="mb-2 text-[11px] font-semibold text-emerald-700">成功结果</div>
                 <div className="overflow-x-auto rounded border border-slate-200">
-                  <table className="min-w-[680px] w-full text-[11px]">
+                  <table className="min-w-[850px] w-full text-[11px]">
                     <thead className="bg-slate-50 text-slate-500">
                       <tr>
                         <th className="p-2 text-left">行/SKU</th>
                         <th className="p-2 text-left">类目</th>
+                        <th className="p-2 text-right">售价</th>
+                        <th className="p-2 text-right">佣金</th>
                         <th className="p-2 text-right">净利</th>
                         <th className="p-2 text-right">ROI</th>
                         <th className="p-2 text-right">利润率</th>
@@ -2409,6 +2411,10 @@ export default function Home() {
                         }`}>
                           <td className="p-2 font-medium text-slate-700">#{item.rowIndex} {item.sku || ""}</td>
                           <td className="p-2 text-slate-600">{item.input.secondaryCategory}</td>
+                          <td className="p-2 text-right font-semibold text-indigo-700">¥{(item.input.targetPriceRMB || 0).toFixed(0)}</td>
+                          <td className="p-2 text-right font-semibold text-slate-700">
+                            {item.result ? `¥${item.result.costs.commission.toFixed(2)} (${item.result.commissionRate}%)` : "-"}
+                          </td>
                           <td className={`p-2 text-right font-bold ${getFinanceTextClass(item.netProfit)}`}>¥{(item.netProfit ?? 0).toFixed(2)}</td>
                           <td className={`p-2 text-right font-semibold ${getFinanceTextClass(item.roi)}`}>{(item.roi ?? 0).toFixed(1)}%</td>
                           <td className={`p-2 text-right font-semibold ${getFinanceTextClass(item.profitMargin)}`}>{(item.profitMargin ?? 0).toFixed(1)}%</td>

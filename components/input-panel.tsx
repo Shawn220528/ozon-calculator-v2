@@ -572,12 +572,12 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         </div>
       </Section>
 
-      {/* 模块 B：供应链与损耗成本 */}
+      {/* 模块 B：采购与退货成本 */}
       <Section
         id="cost"
-        title="成本物流"
-        summary={`采购 ¥${input.purchaseCost || 0} / 头程 ¥${input.domesticShipping || 0} / 支付 ${input.paymentFee || 0}%`}
-        icon={<Truck className="h-4 w-4" />}
+        title="采购成本"
+        summary={`采购 ¥${input.purchaseCost || 0} / 头程 ¥${input.domesticShipping || 0} / 退货 ${input.returnRate || 0}%`}
+        icon={<DollarSign className="h-4 w-4" />}
         openSections={openSections}
         setOpenSections={setOpenSections}
         defaultOpen
@@ -585,7 +585,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
-              <Label className="text-xs">采购成本</Label>
+              <Label className="text-xs">采购成本 (¥)</Label>
               <Input
                 type="number"
                 min="0"
@@ -596,7 +596,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">国内头程</Label>
+              <Label className="text-xs">国内头程 (¥)</Label>
               <Input
                 type="number"
                 min="0"
@@ -607,7 +607,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">包装杂费</Label>
+              <Label className="text-xs">包装杂费 (¥)</Label>
               <Input
                 type="number"
                 min="0"
@@ -618,14 +618,14 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">支付手续费 (%)</Label>
+              <Label className="text-xs">多件装数量</Label>
               <Input
                 type="number"
-                min="0"
+                min="1"
                 max="100"
-                step="0.1"
-                value={numberInputValue(input.paymentFee)}
-                onChange={(e) => updateField("paymentFee", parseFloat(e.target.value) || 0)}
+                step="1"
+                value={input.multiItemCount || 1}
+                onChange={(e) => updateField("multiItemCount", Math.max(1, parseInt(e.target.value) || 1))}
                 className="h-8 text-sm"
               />
             </div>
@@ -667,11 +667,11 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         </div>
       </Section>
 
-      {/* 模块 C：高阶广告 ROI 控制台 */}
+      {/* 模块 C：广告推广 */}
       <Section
         id="ads"
-        title="广告退货"
-        summary={`${input.cpaEnabled ? "CPA开" : "CPA关"} / ${input.cpcEnabled ? "CPC开" : "CPC关"} / 退货 ${input.returnRate || 0}%`}
+        title="广告推广"
+        summary={`CPA${input.cpaEnabled ? "开" : "关"} / CPC${input.cpcEnabled ? "开" : "关"}`}
         icon={<Megaphone className="h-4 w-4" />}
         openSections={openSections}
         setOpenSections={setOpenSections}
@@ -915,11 +915,11 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         </div>
       </Section>
 
-      {/* 模块 D：前台定价与营销缓冲 */}
+      {/* 模块 D：定价与税务 */}
       <Section
         id="pricing"
-        title="售价税务"
-        summary={`售价 ¥${input.targetPriceRMB || 0} / ${input.taxEnabled ? "含税" : "税前"}`}
+        title="定价税务"
+        summary={`售价 ¥${input.targetPriceRMB || 0} / 支付 ${input.paymentFee || 0}% / 税金${input.taxEnabled ? "开" : "关"}`}
         icon={<Tag className="h-4 w-4" />}
         openSections={openSections}
         setOpenSections={setOpenSections}
@@ -1257,6 +1257,23 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
             )}
           </div>
 
+          {/* 🔹 支付手续费 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-medium">支付手续费 (%)</Label>
+              <span className="text-[10px] text-slate-500">Ozon 平台扣费</span>
+            </div>
+            <Input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={numberInputValue(input.paymentFee)}
+              onChange={(e) => updateField("paymentFee", parseFloat(e.target.value) || 0)}
+              className="h-8 text-sm"
+            />
+          </div>
+
           {/* 🔹 税务模拟 */}
           <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 space-y-2">
             <div className="flex items-center justify-between">
@@ -1321,28 +1338,6 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
             </div>
           </div>
           
-          {/* 🔹 多件装购买数量 */}
-          <div className="space-y-1.5">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Label className="text-xs cursor-help">多件装数量</Label>
-                </TooltipTrigger>
-                <TooltipContent side="top" sideOffset={8} className="max-w-xs z-[9999] bg-white border border-slate-200 shadow-lg p-3">
-                  <p className="text-xs text-slate-600">客户单次购买多件时，运费可按总重计费再均摊，每件运费更低。</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            <Input
-              type="number"
-              min="1"
-              max="100"
-              step="1"
-              value={input.multiItemCount || 1}
-              onChange={(e) => updateField("multiItemCount", Math.max(1, parseInt(e.target.value) || 1))}
-              className="h-8 text-sm"
-            />
-          </div>
         </div>
       </Section>
     </div>
