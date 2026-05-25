@@ -44,6 +44,8 @@ const {
 const {
   calculateSuggestedPrice,
   calculateCpcCost,
+  calculateExchangeRateStressTest,
+  calculateSixTierPricing,
   performFullCalculation,
   getCommissionRate,
   normalizeCommissionPriceRUB,
@@ -61,6 +63,11 @@ const {
 const {
   smartParseCSV,
 } = loadTsModule(path.join("lib", "smart-parser.ts"));
+
+const {
+  calculateShippingCost,
+  parseBillingWeight,
+} = loadTsModule(path.join("lib", "data-hub-context.tsx"));
 
 const {
   isSkippableShippingRow,
@@ -251,6 +258,39 @@ const suggestionCommission = {
     { min: 5000.01, max: Infinity, rate: 20 },
   ],
 };
+
+const actualWeightBilling = parseBillingWeight(baseSuggestionChannel, 100, 100, 100, 300);
+assertEqual(actualWeightBilling.divisor, 0, "volumetric divisor 0 should remain explicit no-volumetric billing");
+assertEqual(actualWeightBilling.volumetricWeight, 0, "no-volumetric channel should not synthesize dimensional weight");
+assertEqual(actualWeightBilling.billingWeight, 300, "no-volumetric channel should bill by actual weight");
+assertApproxEqual(
+  calculateShippingCost(baseSuggestionChannel, 300, 100, 100, 100, 300),
+  11,
+  "shipping cost should not apply volumetric fallback when divisor is 0"
+);
+
+const malformedDivisorBilling = parseBillingWeight(
+  { ...baseSuggestionChannel, billingType: "取大", volumetricDivisor: 17 },
+  20,
+  15,
+  10,
+  300
+);
+assertEqual(malformedDivisorBilling.divisor, 12000, "positive malformed divisor should still fall back to 12000");
+
+const volumetricChannelForComparison = {
+  ...baseSuggestionChannel,
+  id: "volumetric-comparison",
+  billingType: "取大",
+  volumetricDivisor: 12000,
+};
+const actualOnlyCost = calculateShippingCost(baseSuggestionChannel, 300, 50, 50, 50, 300);
+const volumetricCost = calculateShippingCost(volumetricChannelForComparison, 300, 50, 50, 50, 300);
+assertEqual(
+  volumetricCost > actualOnlyCost,
+  true,
+  "shipping cost comparisons must recalculate billing weight per channel instead of reusing one chargeable weight"
+);
 
 const petCarryBagCommission = {
   primaryCategory: "宠物用品",
@@ -506,6 +546,75 @@ assertEqual(isProfitMarginBelowThreshold(20, 20), false, "profit threshold shoul
 assertEqual(isProfitMarginBelowThreshold(19.96, 20), false, "profit threshold should use one-decimal display rounding");
 assertEqual(isProfitMarginBelowThreshold(19.94, 20), true, "profit threshold should warn below display threshold");
 assertEqual(isProfitMarginBelowThreshold(20.04, 20), false, "profit threshold should not warn above threshold");
+
+const adCommission = {
+  primaryCategory: "Test",
+  secondaryCategory: "Test",
+  tertiaryCategory: "Test",
+  tiers: [{ min: 0, max: Infinity, rate: 10 }],
+};
+const baseAdInput = {
+  primaryCategory: "Test",
+  secondaryCategory: "Test",
+  tertiaryCategory: "Test",
+  length: 10,
+  width: 10,
+  height: 10,
+  weight: 100,
+  purchaseCost: 40,
+  domesticShipping: 0,
+  packagingFee: 0,
+  targetPriceRMB: 100,
+  exchangeRate: 10,
+  exchangeRateBuffer: 0,
+  withdrawalFee: 0,
+  paymentFee: 0,
+  cpaEnabled: true,
+  cpaRate: 22,
+  cpcEnabled: false,
+  cpcBid: 0,
+  cpcConversionRate: 0,
+  cpcBillingMode: "bidCvr",
+  cpcSalesPercent: 0,
+  returnRate: 0,
+  returnHandling: "destroy",
+  multiItemCount: 1,
+  fulfillmentMode: "RFBS",
+  valueLimitCurrency: "RUB",
+  designatedProviders: [],
+  hasBattery: false,
+  hasLiquid: false,
+  taxEnabled: false,
+  vatRate: 0,
+  corporateTaxRate: 0,
+  promotionDiscount: 0,
+  profitWarningThreshold: 20,
+};
+const safeAdResult = performFullCalculation(baseAdInput, adCommission, undefined);
+assertApproxEqual(safeAdResult.adRiskControl.currentACOS, 22, "current ACOS should reflect CPA rate");
+assertApproxEqual(safeAdResult.adRiskControl.breakEvenACOS, 50, "break-even ACOS should use pre-ad profit room");
+assertEqual(safeAdResult.adRiskControl.isOverBudget, false, "CPA below break-even ACOS should not be over budget");
+assertEqual(
+  safeAdResult.warnings.some((warning) => warning.includes("ROAS") || warning.includes("广告投放亏损")),
+  false,
+  "ROAS warning should not contradict safe ACOS"
+);
+const overBudgetAdResult = performFullCalculation({ ...baseAdInput, cpaRate: 55 }, adCommission, undefined);
+assertEqual(overBudgetAdResult.adRiskControl.isOverBudget, true, "CPA above break-even ACOS should be over budget");
+assertEqual(
+  overBudgetAdResult.warnings.some((warning) => warning.includes("当前 ACOS")),
+  true,
+  "over-budget ad result should explain ACOS threshold"
+);
+
+const exchangeStress = calculateExchangeRateStressTest(100, 10, adCommission, 0, 0, 50, 0, 0, "RFBS");
+assertEqual(exchangeStress.at5PercentDrop < 40, true, "5% worse exchange rate should reduce profit");
+assertEqual(exchangeStress.at10PercentDrop < exchangeStress.at5PercentDrop, true, "10% worse exchange rate should reduce profit more than 5%");
+assertApproxEqual(exchangeStress.zeroProfitRate, 18, "zero-profit exchange rate should be expressed as 1 CNY = N RUB");
+
+const zeroFeePricing = calculateSixTierPricing({ ...baseAdInput, cpaEnabled: false, cpaRate: 0 }, adCommission, undefined);
+assertEqual(zeroFeePricing[0].disabled, false, "six-tier pricing should calculate with zero withdrawal fee");
+assertApproxEqual(zeroFeePricing[0].priceRMB, 42.11, "six-tier pricing should preserve explicit 0% withdrawal fee", 0.01);
 
 const newShippingWorkbook = "E:\\CodexProjects\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx";
 if (fs.existsSync(newShippingWorkbook)) {

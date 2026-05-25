@@ -372,7 +372,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         return {
           ...item,
           id: count > 0 ? `${baseId}_${count + 1}` : baseId,
-          volumetricDivisor: item.volumetricDivisor !== undefined && item.volumetricDivisor < 1000 ? 12000 : item.volumetricDivisor,
+          volumetricDivisor: item.volumetricDivisor !== undefined && item.volumetricDivisor > 0 && item.volumetricDivisor < 1000 ? 12000 : item.volumetricDivisor,
         };
       });
     };
@@ -503,10 +503,11 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
     data: CategoryCommission[] | ShippingChannel[],
     summary: ImportSummary,
     fileName?: string
-  ) => {
+  ): Promise<string | null> => {
     const localKey = type === "commission" ? "ozon_commission_data" : "ozon_shipping_data";
     const localResult = safeLocalStorageSet(localKey, JSON.stringify(data));
     let meta: ImportedDatasetMeta | null = null;
+    let persistenceWarning: string | null = null;
 
     try {
       meta = await saveImportedDataset(type, data, {
@@ -519,19 +520,21 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : "IndexedDB 写入失败";
+      persistenceWarning = `${type === "commission" ? "佣金表" : "物流表"}导入成功，但未能写入 IndexedDB：${detail}`;
       setImportedDataMeta((prev) => ({
         ...prev,
-        lastPersistenceError: `${type === "commission" ? "佣金表" : "物流表"}导入成功，但未能持久保存：${detail}`,
+        lastPersistenceError: persistenceWarning,
       }));
       console.warn("[数据中心] 导入数据持久化失败:", error);
     }
 
     if (!localResult.success && !meta) {
+      persistenceWarning = `${type === "commission" ? "佣金表" : "物流表"}导入成功，但浏览器存储失败，刷新后可能丢失：${localResult.error || "未知错误"}`;
       setImportedDataMeta((prev) => ({
         ...prev,
-        lastPersistenceError: `${type === "commission" ? "佣金表" : "物流表"}导入成功，但浏览器存储失败，刷新后可能丢失：${localResult.error || "未知错误"}`,
+        lastPersistenceError: persistenceWarning,
       }));
-      return;
+      return persistenceWarning;
     }
 
     setImportedDataMeta((prev) => ({
@@ -539,6 +542,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
       [type]: meta || prev[type],
       lastPersistenceError: meta ? null : prev.lastPersistenceError,
     }));
+    return persistenceWarning;
   }, [DATA_VERSION]);
 
   /**
@@ -573,7 +577,10 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
                   FBP: countCommissionTiers(parsed, "FBP"),
                 },
               };
-              await persistImportedData("commission", parsed, summary, file.name);
+              const persistenceWarning = await persistImportedData("commission", parsed, summary, file.name);
+              if (persistenceWarning) {
+                summary.warnings = [...(summary.warnings || []), persistenceWarning];
+              }
               setLastImportSummary(summary);
               resolve(summary);
             } catch (e) {
@@ -608,7 +615,10 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
                 FBP: countCommissionTiers(parsed, "FBP"),
               },
             };
-            await persistImportedData("commission", parsed, summary, file.name);
+            const persistenceWarning = await persistImportedData("commission", parsed, summary, file.name);
+            if (persistenceWarning) {
+              summary.warnings = [...(summary.warnings || []), persistenceWarning];
+            }
             setLastImportSummary(summary);
             resolve(summary);
           } catch (err) {
@@ -806,7 +816,10 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             setShippingData(finalData);
             setShippingLoaded(true);
             const summary = makeShippingSummary(rawRows, finalData);
-            await persistImportedData("shipping", finalData, summary, file.name);
+            const persistenceWarning = await persistImportedData("shipping", finalData, summary, file.name);
+            if (persistenceWarning) {
+              summary.warnings = [...(summary.warnings || []), persistenceWarning];
+            }
             setLastImportSummary(summary);
             resolve(summary);
           } catch (err) {
@@ -840,7 +853,10 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               setShippingData(finalData);
               setShippingLoaded(true);
               const summary = makeShippingSummary(rawRows, finalData);
-              await persistImportedData("shipping", finalData, summary, file.name);
+              const persistenceWarning = await persistImportedData("shipping", finalData, summary, file.name);
+              if (persistenceWarning) {
+                summary.warnings = [...(summary.warnings || []), persistenceWarning];
+              }
               setLastImportSummary(summary);
               resolve(summary);
             } catch (e) {
@@ -1216,6 +1232,7 @@ function calculateChannelVolumetricWeight(
   height: number,
   divisor: number = 12000
 ): number {
+  if (divisor <= 0) return 0;
   return ((length * width * height) / divisor) * 1000;
 }
 
@@ -1226,7 +1243,10 @@ function calculateChannelVolumetricWeight(
  */
 function parseVolumetricDivisor(channel: ShippingChannel): number {
   // 🔴 修复：移除空格后再检查，防止 "12 000" 被截断为 12
-  const cleanDivisor = String(channel.volumetricDivisor || "").replace(/[\s,]/g, "");
+  if (channel.volumetricDivisor === 0) {
+    return 0;
+  }
+  const cleanDivisor = String(channel.volumetricDivisor ?? "").replace(/[\s,]/g, "");
   const parsedFromField = parseInt(cleanDivisor) || 0;
   
   if (parsedFromField >= 1000) {
@@ -1235,6 +1255,16 @@ function parseVolumetricDivisor(channel: ShippingChannel): number {
   
   // 否则尝试从 billingType 解析除数
   const billingType = channel.billingType || "";
+  const normalizedBillingType = billingType.toLowerCase();
+  if (
+    (channel.volumetricDivisor === undefined || channel.volumetricDivisor === null) &&
+    normalizedBillingType.includes("实际") &&
+    !normalizedBillingType.includes("最大") &&
+    !normalizedBillingType.includes("取大") &&
+    !normalizedBillingType.includes("体积")
+  ) {
+    return 0;
+  }
   const cleanBillingType = billingType.replace(/[\s,]/g, "");  // 移除空格
   
   // 常见除数模式匹配
@@ -1285,12 +1315,20 @@ export function parseBillingWeight(
 } {
   const billingTypeRaw = channel.billingType || "实际重量";
   const divisor = parseVolumetricDivisor(channel);
-  
-  // 🔴 安全检查：如果除数异常（< 1000），强制使用 12000
-  const safeDivisor = divisor < 1000 ? 12000 : divisor;
+
+  if (divisor <= 0) {
+    return {
+      billingWeight: actualWeight,
+      actualWeight,
+      volumetricWeight: 0,
+      isVolumetric: false,
+      divisor: 0,
+      billingType: "实际重",
+    };
+  }
   
   // 计算体积重 (g)
-  const volumetricWeight = ((length * width * height) / safeDivisor) * 1000;
+  const volumetricWeight = ((length * width * height) / divisor) * 1000;
   
   // 🔴 关键修复：实时判定计抛，使用 Math.round 防止浮点误差
   const isActuallyVolumetric = Math.round(volumetricWeight) > Math.round(actualWeight);
@@ -1340,7 +1378,7 @@ export function parseBillingWeight(
     actualWeight,
     volumetricWeight,
     isVolumetric,
-    divisor: safeDivisor,
+    divisor,
     billingType: billingTypeDesc,
   };
 }

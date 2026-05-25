@@ -210,7 +210,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
   const billingWeight = selectedBillingInfo?.billingWeight || 0;
   const actualWeight = selectedBillingInfo?.actualWeight || input.weight;
   const volumetricWeight = selectedBillingInfo?.volumetricWeight || 0;
-  const divisor = selectedBillingInfo?.divisor || 12000;
+  const divisor = selectedBillingInfo?.divisor ?? 12000;
 
   const updateField = <K extends keyof CalculationInput>(key: K, value: CalculationInput[K]) => {
     onInputChange({ ...input, [key]: value });

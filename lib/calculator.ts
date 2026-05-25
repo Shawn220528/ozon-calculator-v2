@@ -25,6 +25,11 @@ import { CalculationInput, CalculationResult, CategoryCommission, CommissionTier
 import { calculateShippingCost, parseBillingWeight } from "./data-hub-context";
 import { cnyToRub, rubToCny } from "./currency";
 
+function parseFiniteNumber(value: number, fallback: number): number {
+  const parsed = parseFloat(String(value));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 // 佣金阶梯边界常量（RUB）
 const TIER_BOUNDARIES = [
   { min: 0, max: 1500 },
@@ -439,11 +444,11 @@ export function calculateSixTierPricing(
   const baseFixedCost = purchaseCost + domesticShipping + packagingFee + internationalShipping + returnCost;
   
   // 🔹 安全校验：汇率和固定成本
-  const exchangeRate = parseFloat(String(input.exchangeRate)) || 12;
-  const fixedCost = parseFloat(String(baseFixedCost)) || 0;
-  const withdrawalFee = parseFloat(String(input.withdrawalFee)) || 1.5;
-  const paymentFee = parseFloat(String(input.paymentFee)) || 0;
-  const cpaRate = input.cpaEnabled ? (parseFloat(String(input.cpaRate)) || 0) : 0;
+  const exchangeRate = parseFiniteNumber(input.exchangeRate, 12);
+  const fixedCost = parseFiniteNumber(baseFixedCost, 0);
+  const withdrawalFee = parseFiniteNumber(input.withdrawalFee, 1.5);
+  const paymentFee = parseFiniteNumber(input.paymentFee, 0);
+  const cpaRate = input.cpaEnabled ? parseFiniteNumber(input.cpaRate, 0) : 0;
 
   return anchors.map((anchor) => {
     const T_m = anchor.profitMargin / 100; // 转换为小数
@@ -666,13 +671,13 @@ export function calculateExchangeRateStressTest(
   zeroProfitRate: number;
 } {
   // 🔹 非空校验：确保参与运算的值均经过 parseFloat()
-  const pRMB = parseFloat(String(priceRMB)) || 0;
-  const exRate = parseFloat(String(exchangeRate)) || 12;
-  const wFee = parseFloat(String(withdrawalFee)) || 1.5;
-  const cRate = parseFloat(String(cpaRate)) || 0;
-  const pFee = parseFloat(String(paymentFee)) || 0;
-  const cpcRate = Math.max(0, parseFloat(String(cpcSalesPercent)) || 0) / 100;
-  const fCost = parseFloat(String(totalFixedCost)) || 0;
+  const pRMB = parseFiniteNumber(priceRMB, 0);
+  const exRate = parseFiniteNumber(exchangeRate, 12);
+  const wFee = parseFiniteNumber(withdrawalFee, 1.5);
+  const cRate = parseFiniteNumber(cpaRate, 0);
+  const pFee = parseFiniteNumber(paymentFee, 0);
+  const cpcRate = Math.max(0, parseFiniteNumber(cpcSalesPercent, 0)) / 100;
+  const fCost = parseFiniteNumber(totalFixedCost, 0);
   
   // 🔹 前台卢布售价（固定）
   const priceRUB = cnyToRub(pRMB, exRate);
@@ -1370,13 +1375,6 @@ export function performFullCalculation(
     suggestions.push(blackHoleWarning);
   }
 
-  // ROAS
-  const roas = calculateROAS(priceRMB, totalAdCost);
-  const breakEvenROAS = calculateBreakEvenROAS(totalFixedCost + totalAdCost, totalAdCost);
-  if (totalAdCost > 0 && roas < breakEvenROAS) {
-    warnings.push(`ROAS (${roas.toFixed(2)}) 低于盈亏平衡底线 (${breakEvenROAS.toFixed(2)})，广告投放亏损！`);
-  }
-
   // ===== 新增：广告风控计算 =====
   // 计算不包含广告费的固定成本
   const totalFixedCostWithoutAds = 
@@ -1402,6 +1400,15 @@ export function performFullCalculation(
   
   // 检测是否超预算：统一按当前 ACOS 是否超过保本 ACOS 判断，避免 CPA 率在 M 中扣除后再次被 totalAdCost 双扣。
   const isOverBudget = currentACOS > breakEvenACOS + 0.0001 && totalAdCost > 0;
+
+  // ROAS 警告与 ACOS 保本线共用同一口径，避免出现 ACOS 未超保本但 ROAS 单独报亏损。
+  const roas = calculateROAS(priceRMB, totalAdCost);
+  const breakEvenAdCost = priceRMB * (breakEvenACOS / 100);
+  const breakEvenROAS = breakEvenAdCost > 0 ? calculateBreakEvenROAS(priceRMB, breakEvenAdCost) : Infinity;
+  if (isOverBudget) {
+    const breakEvenRoasText = Number.isFinite(breakEvenROAS) ? breakEvenROAS.toFixed(2) : "无保本空间";
+    warnings.push(`当前 ACOS (${currentACOS.toFixed(1)}%) 已超过保本 ACOS (${breakEvenACOS.toFixed(1)}%)，ROAS (${roas.toFixed(2)}) 低于保本线 (${breakEvenRoasText})。`);
+  }
   
   // CVR 灵敏度分析（仅当 CPC 启用时）
   const cvrSensitivity = input.cpcEnabled && (input.cpcBillingMode || "bidCvr") === "bidCvr" && input.cpcConversionRate > 0

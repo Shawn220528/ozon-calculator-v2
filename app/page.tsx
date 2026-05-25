@@ -130,12 +130,6 @@ const EMPTY_INPUT: CalculationInput = {
 const STORAGE_KEY = "ozon-calculator-input";
 const CONFIG_EXPORT_KEY = "ozon-calculator-config";
 
-// 🔹 工具函数：检查渠道是否支持体积重计费
-function supportsVolumetricBilling(channel: ShippingChannel): boolean {
-  const billingType = (channel.billingType || "").toLowerCase();
-  return billingType.includes("体积") || billingType.includes("取大") || billingType.includes("max");
-}
-
 function summarizeInterceptionReasons(unavailable: UnavailableShippingChannel[]): string {
   const counts = new Map<string, number>();
   unavailable.forEach((channel) => {
@@ -884,6 +878,11 @@ export default function Home() {
     setUploadToast({ message: "✅ 已清空计算输入，导入数据已保留", type: "success" });
   }, [input.exchangeRate]);
 
+  const appendImportWarning = useCallback((message: string, summary: { warnings?: string[] }) => {
+    const warning = summary.warnings?.[summary.warnings.length - 1];
+    return warning ? `${message}；⚠️ ${warning}` : message;
+  }, []);
+
   // 🔹 佣金表上传处理
   const handleCommissionFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -897,7 +896,7 @@ export default function Home() {
       const isOfficialTarifs = sheetName === "Full ChinaHK" || sheetName === "MP Tree Tarifs CN" || /RFBS\s*->/i.test(csvContent);
       if (isOfficialTarifs) {
         const summary = await loadCommissionData(file, "overwrite");
-        setUploadToast({ message: `✅ 已识别官方 Tarifs 格式：${summary.categories || 0} 个类目，RFBS ${summary.commissionModeMapped?.RFBS || 0} 条，FBP ${summary.commissionModeMapped?.FBP || 0} 条`, type: "success" });
+        setUploadToast({ message: appendImportWarning(`✅ 已识别官方 Tarifs 格式：${summary.categories || 0} 个类目，RFBS ${summary.commissionModeMapped?.RFBS || 0} 条，FBP ${summary.commissionModeMapped?.FBP || 0} 条`, summary), type: "success" });
         e.target.value = "";
         return;
       }
@@ -910,13 +909,13 @@ export default function Home() {
       // 回退到直接加载
       try {
         const summary = await loadCommissionData(file, "overwrite");
-        setUploadToast({ message: `✅ 佣金表 "${file.name}" 导入成功：${summary.categories || 0} 个类目`, type: 'success' });
+        setUploadToast({ message: appendImportWarning(`✅ 佣金表 "${file.name}" 导入成功：${summary.categories || 0} 个类目`, summary), type: 'success' });
       } catch (loadErr) {
         console.error("上传佣金表失败:", loadErr);
         setUploadToast({ message: `❌ 佣金表导入失败: ${loadErr instanceof Error ? loadErr.message : '未知错误'}`, type: 'error' });
       }
     }
-  }, [loadCommissionData]);
+  }, [appendImportWarning, loadCommissionData]);
 
   // 🔹 物流表上传处理
   const handleShippingFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -940,13 +939,13 @@ export default function Home() {
       // 回退到直接加载
       try {
         const summary = await loadShippingData(file, "overwrite");
-        setUploadToast({ message: `✅ 物流表 "${file.name}" 导入成功：${summary.channels || 0} 条渠道，人民币货值 ${summary.valueRMBMapped || 0} 条，卢布货值 ${summary.valueRUBMapped || 0} 条`, type: 'success' });
+        setUploadToast({ message: appendImportWarning(`✅ 物流表 "${file.name}" 导入成功：${summary.channels || 0} 条渠道，人民币货值 ${summary.valueRMBMapped || 0} 条，卢布货值 ${summary.valueRUBMapped || 0} 条`, summary), type: 'success' });
       } catch (loadErr) {
         console.error("上传物流表失败:", loadErr);
         setUploadToast({ message: `❌ 物流表导入失败: ${loadErr instanceof Error ? loadErr.message : '未知错误'}`, type: 'error' });
       }
     }
-  }, [loadShippingData]);
+  }, [appendImportWarning, loadShippingData]);
 
   const handleBatchFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1166,14 +1165,14 @@ export default function Home() {
           ) as Record<string, number>;
           updateColumnMapping("commission", mappingRecord);
           const summary = await loadCommissionData(pendingMappingFile, "overwrite", mappingRecord);
-          setUploadToast({ message: `✅ 佣金表导入成功：${summary.categories || 0} 个类目`, type: 'success' });
+          setUploadToast({ message: appendImportWarning(`✅ 佣金表导入成功：${summary.categories || 0} 个类目`, summary), type: 'success' });
         } else {
           const mappingRecord = Object.fromEntries(
             mappings.map((m) => [m.systemField, m.columnIndex])
           ) as Record<string, number>;
           updateColumnMapping("shipping", mappingRecord);
           const summary = await loadShippingData(pendingMappingFile, "overwrite", mappingRecord);
-          setUploadToast({ message: `✅ 物流表导入成功：${summary.channels || 0} 条渠道，人民币货值 ${summary.valueRMBMapped || 0} 条，卢布货值 ${summary.valueRUBMapped || 0} 条`, type: 'success' });
+          setUploadToast({ message: appendImportWarning(`✅ 物流表导入成功：${summary.channels || 0} 条渠道，人民币货值 ${summary.valueRMBMapped || 0} 条，卢布货值 ${summary.valueRUBMapped || 0} 条`, summary), type: 'success' });
           
           // 🔹 物流表：提取拦截配置并保存
           const config: Record<string, boolean> = {};
@@ -1191,7 +1190,7 @@ export default function Home() {
     
     setPendingMappingFile(null);
     setParsedCsvData(null);
-  }, [pendingMappingFile, mappingDataType, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig]);
+  }, [appendImportWarning, pendingMappingFile, mappingDataType, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig]);
   
   // 🔹 映射取消处理
   const handleMappingCancel = useCallback(() => {
@@ -1219,7 +1218,7 @@ export default function Home() {
     const valueCoverage = shippingData.length > 0
       ? Math.round((shippingData.filter((ch) => ch.minValue !== undefined || ch.maxValue !== undefined || ch.minValueRUB !== undefined || ch.maxValueRUB !== undefined).length / shippingData.length) * 100)
       : 0;
-    const missingLogisticsFields = shippingData.filter((ch) => !ch.volumetricDivisor || !ch.deliveryTime || !ch.maxWeight).length;
+    const missingLogisticsFields = shippingData.filter((ch) => ch.volumetricDivisor === undefined || ch.volumetricDivisor === null || !ch.deliveryTime || !ch.maxWeight).length;
     const hasImportedData = Boolean(importedDataMeta.commission || importedDataMeta.shipping || lastImportSummary);
     const usingDefaultData = commissionLoaded && shippingLoaded && !hasImportedData && commissionData.length > 0 && shippingData.length > 0;
     const latestImportAt = [importedDataMeta.commission?.importedAt, importedDataMeta.shipping?.importedAt]
@@ -2045,7 +2044,7 @@ export default function Home() {
               sixTierPricing={sixTierPricing}
               commission={commission}
               onCopyOzonPrice={handleCopyOzonPrice}
-              onApplyPrice={(priceRMB) => handleInputChange({ ...input, targetPriceRMB: priceRMB })}
+              onApplyPrice={(priceRMB) => setInput((prev) => ({ ...prev, targetPriceRMB: priceRMB }))}
             />
           </div>
 
@@ -2193,9 +2192,6 @@ export default function Home() {
                 const cost = channelCosts.get(channel.id) ?? 0;
                 const billing = channelBillingInfo.get(channel.id);
                 const isSelected = selectedChannel?.id === channel.id;
-                const hasVolumetricBilling = supportsVolumetricBilling(channel);
-                const showVolumetricWarning = hasVolumetricBilling && billing?.isVolumetric;
-                const divisor = billing?.divisor || 12000;
                 
                 return (
                   <LogisticsCard

@@ -69,7 +69,7 @@ export function LogisticsCard({ channel, cost, billing, isSelected, onClick, inp
     maxSum: channel.maxSumDimension || Infinity,
     minPrice: valueLimitCurrency === "RMB" ? channel.minValue : channel.minValueRUB,
     maxPrice: valueLimitCurrency === "RMB" ? channel.maxValue : channel.maxValueRUB,
-    maxVolWt: billing?.divisor || 12000,
+    maxVolWt: billing?.divisor ?? 12000,
     allowBattery: channel.batteryAllowed !== false,
     allowLiquid: channel.liquidAllowed !== false,
   };

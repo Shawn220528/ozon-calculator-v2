@@ -51,20 +51,29 @@ async function withStore<T>(
 ): Promise<T> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let result: T | undefined;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      db.close();
+      callback();
+    };
+
     const tx = db.transaction(STORE_NAME, mode);
     const store = tx.objectStore(STORE_NAME);
     const request = run(store);
 
-    request.onerror = () => reject(request.error || new Error("IndexedDB 操作失败"));
-    request.onsuccess = () => resolve(request.result);
-    tx.oncomplete = () => db.close();
+    request.onerror = () => finish(() => reject(request.error || new Error("IndexedDB 操作失败")));
+    request.onsuccess = () => {
+      result = request.result;
+    };
+    tx.oncomplete = () => finish(() => resolve(result as T));
     tx.onerror = () => {
-      db.close();
-      reject(tx.error || new Error("IndexedDB 事务失败"));
+      finish(() => reject(tx.error || new Error("IndexedDB 事务失败")));
     };
     tx.onabort = () => {
-      db.close();
-      reject(tx.error || new Error("IndexedDB 事务中断"));
+      finish(() => reject(tx.error || new Error("IndexedDB 事务中断")));
     };
   });
 }
