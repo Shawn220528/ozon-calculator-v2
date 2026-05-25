@@ -466,6 +466,18 @@ export default function Home() {
   const [batchError, setBatchError] = useState<string | null>(null);
   const [batchSortMode, setBatchSortMode] = useState<BatchSortMode>("profit");
   
+  // 🔹 多件装确认对话框状态
+  const [multiItemDialogOpen, setMultiItemDialogOpen] = useState(false);
+  const [multiItemDialogPrevCount, setMultiItemDialogPrevCount] = useState(DEFAULT_INPUT.multiItemCount);
+  const [pendingMultiItemForm, setPendingMultiItemForm] = useState<CalculationInput | null>(null);
+  const prevMultiItemCountRef = useRef(input.multiItemCount);
+  const multiItemDialogOpenRef = useRef(false);
+  
+  // 同步 ref
+  useEffect(() => {
+    multiItemDialogOpenRef.current = multiItemDialogOpen;
+  }, [multiItemDialogOpen]);
+  
   const fetchExchangeRate = useCallback(async () => {
     setIsFetchingRate(true);
     setRateFetchError(null);
@@ -832,11 +844,42 @@ export default function Home() {
 
   // 清除售价时清除利润率错误
   const handleInputChange = useCallback((newInput: CalculationInput) => {
+    const prevCount = prevMultiItemCountRef.current;
+    const newCount = newInput.multiItemCount;
+    
+    // 🔹 当多件装 >1 且值确实变化时，弹出确认对话框
+    if (prevCount !== newCount && newCount > 1 && !multiItemDialogOpenRef.current) {
+      prevMultiItemCountRef.current = newCount;
+      setMultiItemDialogPrevCount(prevCount);
+      setPendingMultiItemForm({ ...newInput });
+      setMultiItemDialogOpen(true);
+      setInput(newInput);
+      return;
+    }
+    
     setInput(newInput);
+    prevMultiItemCountRef.current = newCount;
     if (marginError && newInput.targetPriceRMB !== input.targetPriceRMB) {
       setMarginError(null);
     }
   }, [marginError, input.targetPriceRMB]);
+  
+  // 🔹 多件装确认对话框：确认重新计算
+  const handleMultiItemConfirm = useCallback(() => {
+    if (!pendingMultiItemForm) return;
+    setInput(pendingMultiItemForm);
+    prevMultiItemCountRef.current = pendingMultiItemForm.multiItemCount;
+    setMultiItemDialogOpen(false);
+    setPendingMultiItemForm(null);
+  }, [pendingMultiItemForm]);
+  
+  // 🔹 多件装确认对话框：取消，回退数量
+  const handleMultiItemCancel = useCallback(() => {
+    setInput((prev) => ({ ...prev, multiItemCount: multiItemDialogPrevCount }));
+    prevMultiItemCountRef.current = multiItemDialogPrevCount;
+    setMultiItemDialogOpen(false);
+    setPendingMultiItemForm(null);
+  }, [multiItemDialogPrevCount]);
 
   // 🔹 利润率锁定切换：锁定当前利润率，或解锁
   const handleToggleMarginLock = useCallback(() => {
@@ -2468,6 +2511,169 @@ export default function Home() {
           onCancel={handleMappingCancel}
         />
       )}
+      
+      {/* 🔹 多件装确认对话框 */}
+      <MultiItemConfirmDialog
+        open={multiItemDialogOpen && pendingMultiItemForm !== null}
+        initialInput={pendingMultiItemForm}
+        onConfirm={handleMultiItemConfirm}
+        onCancel={handleMultiItemCancel}
+        onFormChange={setPendingMultiItemForm}
+      />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 🔹 多件装确认对话框组件
+// ─────────────────────────────────────────────────────────────
+function MultiItemConfirmDialog({
+  open,
+  initialInput,
+  onConfirm,
+  onCancel,
+  onFormChange,
+}: {
+  open: boolean;
+  initialInput: CalculationInput | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onFormChange: (input: CalculationInput) => void;
+}) {
+  if (!open || !initialInput) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30" onClick={onCancel}>
+      <div
+        className="mx-2 w-[480px] max-w-[calc(100vw-1rem)] rounded-xl border border-slate-200 bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 标题 */}
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-amber-100 text-amber-700 text-xs font-bold">×</span>
+            <span className="text-sm font-bold text-slate-800">多件装参数确认</span>
+          </div>
+          <button onClick={onCancel} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-4 px-4 py-3">
+          <p className="text-xs leading-relaxed text-amber-700 bg-amber-50 rounded-md p-2.5">
+            多件装模式下运费按总重计费再均摊，每件运费更低。请确认以下参数是否适用于多件装：
+          </p>
+
+          {/* 多件装数量 */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-700">多件装数量</label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              value={initialInput.multiItemCount}
+              onChange={(e) => onFormChange({ ...initialInput, multiItemCount: Math.max(1, parseInt(e.target.value) || 1) })}
+              className="h-8 w-full rounded-md border border-slate-200 px-2.5 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            />
+            <p className="text-[10px] text-slate-500">客户单次购买多件时，运费可按总重计费再均摊，每件运费更低。</p>
+          </div>
+
+          <div className="h-px bg-slate-100" />
+
+          {/* 采购成本 */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-700">采购成本 (¥)</label>
+            <div className="relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">¥</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={initialInput.purchaseCost}
+                onChange={(e) => onFormChange({ ...initialInput, purchaseCost: parseFloat(e.target.value) || 0 })}
+                className="h-8 w-full rounded-md border border-slate-200 pl-6 pr-2.5 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+            </div>
+            <p className="text-[10px] text-amber-600">批量采购可能有议价空间，建议重新评估。</p>
+          </div>
+
+          {/* 包装尺寸 */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-700">包装尺寸 (cm)</label>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                { key: "length" as const, label: "长" },
+                { key: "width" as const, label: "宽" },
+                { key: "height" as const, label: "高" },
+              ] as const).map(({ key, label }) => (
+                <div key={key} className="relative">
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={initialInput[key]}
+                    onChange={(e) => onFormChange({ ...initialInput, [key]: parseFloat(e.target.value) || 0 })}
+                    className="h-8 w-full rounded-md border border-slate-200 px-2.5 pr-6 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                    placeholder="0"
+                  />
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">{label}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-amber-600">多件装可能会改变包装尺寸，影响计抛。</p>
+          </div>
+
+          {/* 单件重量 */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-700">单件物理重量 (g)</label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={initialInput.weight}
+              onChange={(e) => onFormChange({ ...initialInput, weight: parseFloat(e.target.value) || 0 })}
+              className="h-8 w-full rounded-md border border-slate-200 px-2.5 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            />
+            <p className="text-[10px] text-slate-500">每件实际重量（含包装）。多件装总运费 = 单件计费重 × 件数。</p>
+          </div>
+
+          <div className="h-px bg-slate-100" />
+
+          {/* 前台售价 */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-slate-700">前台售价 (RMB)</label>
+            <div className="relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">¥</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={initialInput.targetPriceRMB}
+                onChange={(e) => onFormChange({ ...initialInput, targetPriceRMB: parseFloat(e.target.value) || 0 })}
+                className="h-8 w-full rounded-md border border-slate-200 pl-6 pr-2.5 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+            </div>
+            <p className="text-[10px] text-slate-500">多件装可能单独定价，此处为单件售价。</p>
+          </div>
+        </div>
+
+        {/* 操作按钮 */}
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+          <button
+            onClick={onCancel}
+            className="h-8 rounded-md border border-slate-200 px-4 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            取消，退回之前
+          </button>
+          <button
+            onClick={onConfirm}
+            className="h-8 rounded-md bg-indigo-600 px-4 text-xs font-bold text-white hover:bg-indigo-700"
+          >
+            确认重新计算
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
