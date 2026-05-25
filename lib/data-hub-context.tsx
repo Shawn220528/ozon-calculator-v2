@@ -52,6 +52,157 @@ export interface ColumnMapping {
   shipping: Record<string, number>;   // 物流表列映射
 }
 
+export function evaluateWeightInterceptions(
+  weight: number,
+  channel: ShippingChannel,
+  interceptionConfig: Record<string, boolean>
+): ShippingInterceptionReason[] {
+  const reasons: ShippingInterceptionReason[] = [];
+
+  if (interceptionConfig.minWeight !== false && weight < channel.minWeight) {
+    reasons.push({
+      dimension: "实重",
+      code: "WEIGHT_TOO_LOW",
+      message: "低于最小起重要求",
+      details: `商品 ${weight}g < 渠道最小 ${channel.minWeight}g`,
+    });
+  }
+
+  if (interceptionConfig.maxWeight !== false && weight > channel.maxWeight) {
+    reasons.push({
+      dimension: "实重",
+      code: "WEIGHT_TOO_HIGH",
+      message: "超过最大实重限制",
+      details: `商品 ${weight}g > 渠道最大 ${channel.maxWeight}g`,
+    });
+  }
+
+  return reasons;
+}
+
+export function evaluateVolumetricWeightInterceptions(
+  volumetricWeight: number,
+  channel: ShippingChannel,
+  interceptionConfig: Record<string, boolean>
+): ShippingInterceptionReason[] {
+  if (interceptionConfig.volumetricDivisor === false) return [];
+  if (volumetricWeight <= channel.maxWeight) return [];
+
+  return [{
+    dimension: "体积重",
+    code: "VOLUMETRIC_WEIGHT_TOO_HIGH",
+    message: "超过最大体积重限制",
+    details: `体积重 ${volumetricWeight.toFixed(0)}g > 渠道最大 ${channel.maxWeight}g`,
+  }];
+}
+
+function normalizePositiveLimit(value: number | undefined): number | undefined {
+  return value !== undefined && value !== null && Number.isFinite(value) && value > 0 && value < 999999
+    ? value
+    : undefined;
+}
+
+export function evaluateDimensionInterceptions(
+  length: number,
+  width: number,
+  height: number,
+  channel: ShippingChannel,
+  interceptionConfig: Record<string, boolean>
+): ShippingInterceptionReason[] {
+  const reasons: ShippingInterceptionReason[] = [];
+  const productDims = [length, width, height].sort((a, b) => b - a);
+  const [pLongest, pMiddle, pShortest] = productDims;
+  const channelDims = [
+    normalizePositiveLimit(channel.maxLength),
+    normalizePositiveLimit(channel.maxWidth),
+    normalizePositiveLimit(channel.maxHeight),
+  ];
+
+  if (interceptionConfig.maxLength !== false && channelDims.every((limit) => limit !== undefined)) {
+    const sortedChannelDims = (channelDims as number[]).sort((a, b) => b - a);
+    const checks = [
+      { label: "最长边", product: pLongest, limit: sortedChannelDims[0] },
+      { label: "中间边", product: pMiddle, limit: sortedChannelDims[1] },
+      { label: "最短边", product: pShortest, limit: sortedChannelDims[2] },
+    ];
+    const failed = checks.find((check) => check.product > check.limit);
+
+    if (failed) {
+      reasons.push({
+        dimension: "边长",
+        code: "EDGE_TOO_LONG",
+        message: "单边尺寸超限（包裹可旋转）",
+        details: `商品${failed.label} ${failed.product}cm > 渠道 ${failed.limit}cm`,
+      });
+    }
+  }
+
+  const maxSumDimension = normalizePositiveLimit(channel.maxSumDimension);
+  const sumDim = length + width + height;
+  if (interceptionConfig.maxSumDimension !== false && maxSumDimension !== undefined && sumDim > maxSumDimension) {
+    reasons.push({
+      dimension: "尺寸总和",
+      code: "SUM_DIMENSION_EXCEEDED",
+      message: "长宽高之和超过限制",
+      details: `${sumDim}cm > 渠道 ${maxSumDimension}cm`,
+    });
+  }
+
+  return reasons;
+}
+
+export function evaluateValueInterceptions(
+  priceRMB: number,
+  priceRUB: number,
+  channel: ShippingChannel,
+  valueLimitCurrency: ValueLimitCurrency
+): ShippingInterceptionReason[] {
+  const rmbLimit = {
+    currency: "RMB" as const,
+    min: normalizeLimitValue(channel.minValue),
+    max: normalizeLimitValue(channel.maxValue),
+    price: priceRMB,
+    symbol: "¥",
+  };
+  const rubLimit = {
+    currency: "RUB" as const,
+    min: normalizeLimitValue(channel.minValueRUB),
+    max: normalizeLimitValue(channel.maxValueRUB),
+    price: priceRUB,
+    symbol: "₽",
+  };
+  const preferredLimit = valueLimitCurrency === "RMB" ? rmbLimit : rubLimit;
+  const fallbackLimit = valueLimitCurrency === "RMB" ? rubLimit : rmbLimit;
+  const activeLimit =
+    preferredLimit.min !== undefined || preferredLimit.max !== undefined
+      ? preferredLimit
+      : fallbackLimit.min !== undefined || fallbackLimit.max !== undefined
+        ? fallbackLimit
+        : null;
+
+  if (!activeLimit) return [];
+
+  const min = activeLimit.min;
+  const max = activeLimit.max;
+  const current = activeLimit.price;
+  const unit = activeLimit.symbol;
+  const usedFallback = activeLimit.currency !== valueLimitCurrency;
+  const fallbackText = usedFallback ? "（所选口径缺失，使用备用货值口径）" : "";
+  const rangeText = `${min !== undefined ? `${unit}${min}` : "无下限"}-${max !== undefined ? `${unit}${max}` : "无上限"}`;
+
+  if (!((min !== undefined && current < min) || (max !== undefined && current > max))) return [];
+
+  const code = min !== undefined && current < min ? "VALUE_TOO_LOW" : "VALUE_LIMIT";
+  const message = min !== undefined && current < min ? "商品售价低于渠道货值下限" : "商品售价超出渠道货值上限";
+
+  return [{
+    dimension: "货值",
+    code,
+    message,
+    details: `当前 ${unit}${current.toFixed(activeLimit.currency === "RMB" ? 2 : 0)} 不在 ${rangeText} 范围内${fallbackText}`,
+  }];
+}
+
 interface DataHubContextType {
   commissionData: CategoryCommission[];
   shippingData: ShippingChannel[];
@@ -984,13 +1135,6 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const priceRUB = cnyToRub(priceRMB, rubPerCny);
       
-      // 🔹 关键：排序尺寸 - 包裹可以旋转，比较最长边
-      const productDims = [length, width, height].sort((a, b) => b - a);
-      const pLongest = productDims[0];  // 最长边
-      const pMiddle = productDims[1];  // 中间边
-      const pShortest = productDims[2]; // 最短边
-      const sumDim = length + width + height;
-      
       // 计算体积重
       const calculateVolWeight = (channel: ShippingChannel): number => {
         if (!channel.volumetricDivisor || channel.volumetricDivisor === 0) return 0;
@@ -1020,129 +1164,41 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         // ========== 六维绝对拦截引擎（读取 interceptionConfig 判断是否启用） ==========
         
         // 维度一：货值拦截 (Value Limit)
-        const rmbLimit = {
-          currency: "RMB" as const,
-          min: normalizeLimitValue(channel.minValue),
-          max: normalizeLimitValue(channel.maxValue),
-          price: priceRMB,
-          symbol: "¥",
-        };
-        const rubLimit = {
-          currency: "RUB" as const,
-          min: normalizeLimitValue(channel.minValueRUB),
-          max: normalizeLimitValue(channel.maxValueRUB),
-          price: priceRUB,
-          symbol: "₽",
-        };
-        const preferredLimit = valueLimitCurrency === "RMB" ? rmbLimit : rubLimit;
-        const fallbackLimit = valueLimitCurrency === "RMB" ? rubLimit : rmbLimit;
-        const activeLimit =
-          preferredLimit.min !== undefined || preferredLimit.max !== undefined
-            ? preferredLimit
-            : fallbackLimit.min !== undefined || fallbackLimit.max !== undefined
-              ? fallbackLimit
-              : null;
-
-        if (activeLimit) {
-          const min = activeLimit.min;
-          const max = activeLimit.max;
-          const current = activeLimit.price;
-          const unit = activeLimit.symbol;
-          const usedFallback = activeLimit.currency !== valueLimitCurrency;
-          const fallbackText = usedFallback ? "（所选口径缺失，使用备用货值口径）" : "";
-          const rangeText = `${min !== undefined ? `${unit}${min}` : "无下限"}-${max !== undefined ? `${unit}${max}` : "无上限"}`;
-
-          if ((min !== undefined && current < min) || (max !== undefined && current > max)) {
-            const code = min !== undefined && current < min ? "VALUE_TOO_LOW" : "VALUE_LIMIT";
-            const message = min !== undefined && current < min ? "商品售价低于渠道货值下限" : "商品售价超出渠道货值上限";
-            reasons.push(`❌ 货值不符: ${unit}${current.toFixed(activeLimit.currency === "RMB" ? 2 : 0)} 不在 ${rangeText} 范围${fallbackText}`);
-            interceptionReasons.push({
-              dimension: "货值",
-              code,
-              message,
-              details: `当前 ${unit}${current.toFixed(activeLimit.currency === "RMB" ? 2 : 0)} 不在 ${rangeText} 范围内${fallbackText}`
-            });
-          }
-        }
+        const valueInterceptions = evaluateValueInterceptions(priceRMB, priceRUB, channel, valueLimitCurrency);
+        valueInterceptions.forEach((reason) => {
+          reasons.push(`❌ 货值不符: ${reason.details}`);
+          interceptionReasons.push(reason);
+        });
         
-        // 维度二：物理实重拦截 (Actual Weight Limit) - 仅当启用时
-        if (interceptionConfig.minWeight !== false || interceptionConfig.maxWeight !== false) {
-          if (weight < channel.minWeight) {
-            reasons.push(`🚫 实重不足: ${weight}g < ${channel.minWeight}g (最低起重要求)`);
-            interceptionReasons.push({
-              dimension: "实重",
-              code: "WEIGHT_TOO_LOW",
-              message: `低于最小起重要求`,
-              details: `商品 ${weight}g < 渠道最小 ${channel.minWeight}g`
-            });
-          }
-          if (weight > channel.maxWeight) {
-            reasons.push(`🚫 实重超限: ${weight}g > ${channel.maxWeight}g`);
-            interceptionReasons.push({
-              dimension: "实重",
-              code: "WEIGHT_TOO_HIGH",
-              message: `超过最大实重限制`,
-              details: `商品 ${weight}g > 渠道最大 ${channel.maxWeight}g`
-            });
-          }
-        }
+        // 维度二：物理实重拦截 (Actual Weight Limit)
+        const weightInterceptions = evaluateWeightInterceptions(weight, channel, interceptionConfig);
+        weightInterceptions.forEach((reason) => {
+          reasons.push(
+            reason.code === "WEIGHT_TOO_LOW"
+              ? `🚫 实重不足: ${weight}g < ${channel.minWeight}g (最低起重要求)`
+              : `🚫 实重超限: ${weight}g > ${channel.maxWeight}g`
+          );
+          interceptionReasons.push(reason);
+        });
         
-        // 维度三：绝对边长拦截 (Edge Length Limit) - 排序后比较 - 仅当启用时
-        if (interceptionConfig.maxLength !== false || interceptionConfig.maxSumDimension !== false) {
-          const channelDims = [channel.maxLength || 0, channel.maxWidth || 0, channel.maxHeight || 0].sort((a, b) => b - a);
-          const cLongest = channelDims[0];
-          const cMiddle = channelDims[1];
-          const cShortest = channelDims[2];
-          
-          if (interceptionConfig.maxLength !== false) {
-            if (pLongest > cLongest) {
-              reasons.push(`🚫 单边超限: 商品最长边 ${pLongest}cm > 渠道限制 ${cLongest}cm`);
-              interceptionReasons.push({
-                dimension: "边长",
-                code: "EDGE_TOO_LONG",
-                message: `单边尺寸超限（包裹可旋转）`,
-                details: `商品最长边 ${pLongest}cm > 渠道 ${cLongest}cm`
-              });
-            }
-            if (pMiddle > cMiddle) {
-              reasons.push(`🚫 单边超限: 商品中间边 ${pMiddle}cm > 渠道限制 ${cMiddle}cm`);
-              interceptionReasons.push({
-                dimension: "边长",
-                code: "EDGE_TOO_LONG",
-                message: `单边尺寸超限（包裹可旋转）`,
-                details: `商品中间边 ${pMiddle}cm > 渠道 ${cMiddle}cm`
-              });
-            }
-            if (pShortest > cShortest) {
-              reasons.push(`🚫 单边超限: 商品最短边 ${pShortest}cm > 渠道限制 ${cShortest}cm`);
-              interceptionReasons.push({
-                dimension: "边长",
-                code: "EDGE_TOO_LONG",
-                message: `单边尺寸超限（包裹可旋转）`,
-                details: `商品最短边 ${pShortest}cm > 渠道 ${cShortest}cm`
-              });
-            }
-          }
-          
-          // 维度四：尺寸总和拦截 (Sum of Dimensions Limit) - 仅当启用时
-          if (interceptionConfig.maxSumDimension !== false && sumDim > channel.maxSumDimension) {
-            reasons.push(`🚫 尺寸总和超限: ${sumDim}cm > ${channel.maxSumDimension}cm`);
-            interceptionReasons.push({
-              dimension: "尺寸总和",
-              code: "SUM_DIMENSION_EXCEEDED",
-              message: `长宽高之和超过限制`,
-              details: `${sumDim}cm > 渠道 ${channel.maxSumDimension}cm`
-            });
-          }
-        }
+        // 维度三/四：尺寸和尺寸总和拦截
+        const dimensionInterceptions = evaluateDimensionInterceptions(length, width, height, channel, interceptionConfig);
+        dimensionInterceptions.forEach((reason) => {
+          reasons.push(
+            reason.dimension === "边长"
+              ? `🚫 单边超限: ${reason.details}`
+              : `🚫 尺寸总和超限: ${reason.details}`
+          );
+          interceptionReasons.push(reason);
+        });
         
-        // 维度五：体积重拦截 (Volume Weight Limit) - 仅当启用时
-        if (interceptionConfig.volumetricDivisor !== false) {
-          const volWeight = calculateVolWeight(channel);
-          if (volWeight > (channel.maxWeight * 0.8)) { // 接近上限时预警
-            reasons.push(`⚠️ 体积重警告: ${volWeight.toFixed(0)}g (接近上限)`);
-          }
-        }
+        // 维度五：体积重拦截 (Volume Weight Limit)
+        const volWeight = calculateVolWeight(channel);
+        const volumetricInterceptions = evaluateVolumetricWeightInterceptions(volWeight, channel, interceptionConfig);
+        volumetricInterceptions.forEach((reason) => {
+          reasons.push(`🚫 体积重超限: ${volWeight.toFixed(0)}g > ${channel.maxWeight}g`);
+          interceptionReasons.push(reason);
+        });
         
         // 维度六：特殊属性拦截 (Attribute Limit) - 仅当启用时
         if (interceptionConfig.batteryAllowed !== false && hasBattery && !channel.batteryAllowed) {

@@ -22,6 +22,7 @@ import { useDataHub } from "@/lib/data-hub-context";
 import { CalculationInput, ShippingChannel } from "@/lib/types";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
 import { isProfitMarginBelowThreshold } from "@/lib/profit-threshold";
+import { calculateOriginalPrice, normalizePromotionDiscount } from "@/lib/calculator";
 
 /**
  * 🔹 全局汇率转换准则 (Exchange Rate Conversion Rules)
@@ -1245,14 +1246,14 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               max="99"
               step="1"
               value={numberInputValue(input.promotionDiscount)}
-              onChange={(e) => updateField("promotionDiscount", parseFloat(e.target.value) || 0)}
+              onChange={(e) => updateField("promotionDiscount", normalizePromotionDiscount(parseFloat(e.target.value) || 0))}
               className="h-8 text-sm"
             />
             {input.promotionDiscount > 0 && input.targetPriceRMB > 0 && (
               <div className="text-xs text-muted-foreground p-2 rounded-md bg-muted/30">
                 <span className="font-medium">划线原价:</span>{" "}
-                ¥{(input.targetPriceRMB / (1 - input.promotionDiscount / 100)).toFixed(2)}
-                {" "}(≈{(input.targetPriceRMB / (1 - input.promotionDiscount / 100) * input.exchangeRate).toFixed(0)} ₽)
+                ¥{calculateOriginalPrice(input.targetPriceRMB, input.promotionDiscount).toFixed(2)}
+                {" "}(≈{(calculateOriginalPrice(input.targetPriceRMB, input.promotionDiscount) * input.exchangeRate).toFixed(0)} ₽)
               </div>
             )}
           </div>

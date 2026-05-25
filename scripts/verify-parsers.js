@@ -46,6 +46,16 @@ const {
   calculateCpcCost,
   calculateExchangeRateStressTest,
   calculateSixTierPricing,
+  calculatePricingStrategies,
+  calculateMultiItemProfit,
+  getChargeableWeight,
+  calculateReturnCost,
+  calculateMarginalContribution,
+  calculateNetProfit,
+  normalizePromotionDiscount,
+  calculateOriginalPrice,
+  calculateTaxSimulation,
+  detectShippingDimensionLimits,
   performFullCalculation,
   getCommissionRate,
   normalizeCommissionPriceRUB,
@@ -66,6 +76,10 @@ const {
 
 const {
   calculateShippingCost,
+  evaluateDimensionInterceptions,
+  evaluateValueInterceptions,
+  evaluateWeightInterceptions,
+  evaluateVolumetricWeightInterceptions,
   parseBillingWeight,
 } = loadTsModule(path.join("lib", "data-hub-context.tsx"));
 
@@ -263,6 +277,76 @@ const actualWeightBilling = parseBillingWeight(baseSuggestionChannel, 100, 100, 
 assertEqual(actualWeightBilling.divisor, 0, "volumetric divisor 0 should remain explicit no-volumetric billing");
 assertEqual(actualWeightBilling.volumetricWeight, 0, "no-volumetric channel should not synthesize dimensional weight");
 assertEqual(actualWeightBilling.billingWeight, 300, "no-volumetric channel should bill by actual weight");
+assertDeepEqual(
+  evaluateValueInterceptions(50, 600, { ...baseSuggestionChannel, minValue: 10, maxValue: 500, minValueRUB: 1000, maxValueRUB: 2000 }, "RMB"),
+  [],
+  "preferred RMB value limits should be used when present"
+);
+assertDeepEqual(
+  evaluateValueInterceptions(50, 600, { ...baseSuggestionChannel, minValue: undefined, maxValue: undefined, minValueRUB: 1000, maxValueRUB: 2000 }, "RMB").map((reason) => reason.code),
+  ["VALUE_TOO_LOW"],
+  "RMB value mode should fall back to RUB limits only when RMB limits are missing"
+);
+assertDeepEqual(
+  evaluateValueInterceptions(5000, 60000, { ...baseSuggestionChannel, minValue: 0, maxValue: 999999, minValueRUB: 0, maxValueRUB: 999999 }, "RMB"),
+  [],
+  "zero lower bound and sentinel upper bound should not block value"
+);
+assertDeepEqual(
+  evaluateWeightInterceptions(5, { ...baseSuggestionChannel, minWeight: 10, maxWeight: 1000 }, { minWeight: false, maxWeight: true }),
+  [],
+  "disabled min weight interception should not block below-min packages"
+);
+assertDeepEqual(
+  evaluateWeightInterceptions(1200, { ...baseSuggestionChannel, minWeight: 10, maxWeight: 1000 }, { minWeight: false, maxWeight: true }).map((reason) => reason.code),
+  ["WEIGHT_TOO_HIGH"],
+  "enabled max weight interception should still block above-max packages"
+);
+assertDeepEqual(
+  evaluateWeightInterceptions(5, { ...baseSuggestionChannel, minWeight: 10, maxWeight: 1000 }, { minWeight: true, maxWeight: false }).map((reason) => reason.code),
+  ["WEIGHT_TOO_LOW"],
+  "enabled min weight interception should block below-min packages"
+);
+assertDeepEqual(
+  evaluateVolumetricWeightInterceptions(900, { ...baseSuggestionChannel, maxWeight: 1000 }, { volumetricDivisor: true }),
+  [],
+  "near-limit volumetric weight should not make a channel unavailable"
+);
+assertDeepEqual(
+  evaluateVolumetricWeightInterceptions(1200, { ...baseSuggestionChannel, maxWeight: 1000 }, { volumetricDivisor: true }).map((reason) => reason.code),
+  ["VOLUMETRIC_WEIGHT_TOO_HIGH"],
+  "volumetric weight above max should make a channel unavailable"
+);
+assertDeepEqual(
+  evaluateVolumetricWeightInterceptions(1200, { ...baseSuggestionChannel, maxWeight: 1000 }, { volumetricDivisor: false }),
+  [],
+  "disabled volumetric interception should not block above-max volumetric weight"
+);
+assertDeepEqual(
+  evaluateDimensionInterceptions(20, 10, 5, { ...baseSuggestionChannel, maxLength: 0, maxWidth: 0, maxHeight: 0, maxSumDimension: 0 }, { maxLength: true, maxSumDimension: true }),
+  [],
+  "missing dimension limits should not block packages"
+);
+assertDeepEqual(
+  evaluateDimensionInterceptions(70, 50, 40, { ...baseSuggestionChannel, maxLength: 60, maxWidth: 60, maxHeight: 60, maxSumDimension: 999999 }, { maxLength: true, maxSumDimension: true }).map((reason) => reason.code),
+  ["EDGE_TOO_LONG"],
+  "enabled edge limit should block packages longer than the sortable side limits"
+);
+assertDeepEqual(
+  evaluateDimensionInterceptions(40, 40, 40, { ...baseSuggestionChannel, maxLength: 999999, maxWidth: 999999, maxHeight: 999999, maxSumDimension: 100 }, { maxLength: true, maxSumDimension: true }).map((reason) => reason.code),
+  ["SUM_DIMENSION_EXCEEDED"],
+  "enabled sum dimension limit should block packages above the sum limit"
+);
+assertDeepEqual(
+  detectShippingDimensionLimits(70, 50, 40, { ...baseSuggestionChannel, maxLength: 60, maxWidth: 80, maxHeight: 80, maxSumDimension: 999999 }).map((warning) => warning.type),
+  [],
+  "dimension warning should compare rotatable package sides instead of raw length field"
+);
+assertDeepEqual(
+  detectShippingDimensionLimits(81, 50, 40, { ...baseSuggestionChannel, maxLength: 60, maxWidth: 80, maxHeight: 80, maxSumDimension: 999999 }).map((warning) => warning.type),
+  ["longEdge"],
+  "dimension warning should still warn when sorted longest side exceeds the largest allowed side"
+);
 assertApproxEqual(
   calculateShippingCost(baseSuggestionChannel, 300, 100, 100, 100, 300),
   11,
@@ -325,6 +409,66 @@ if (profitSuggestion.suggestedPriceRMB < fallbackSuggestion.suggestedPriceRMB) {
 assertEqual(profitSuggestion.reason, "profit-target", "profit-aware suggestion reason");
 assertEqual(profitSuggestion.targetMargin, 20, "profit-aware suggestion target margin");
 
+const preciseSuggestionInput = {
+  ...baseSuggestionInput,
+  length: 5,
+  width: 39,
+  height: 3,
+  weight: 2600,
+  purchaseCost: 35,
+  domesticShipping: 0,
+  packagingFee: 0,
+  returnRate: 0,
+  cpaEnabled: true,
+  cpaRate: 0,
+  cpcEnabled: true,
+  cpcBillingMode: "salesPercent",
+  cpcSalesPercent: 12,
+  targetPriceRMB: 0,
+  exchangeRate: 7,
+  withdrawalFee: 3,
+  paymentFee: 0,
+};
+const preciseSuggestionChannel = {
+  ...baseSuggestionChannel,
+  name: "精度测试物流",
+  fixFee: 3.2,
+  varFeePerGram: 0.03,
+  minValue: 100,
+  maxValue: 3550,
+  minValueRUB: 1200,
+  maxValueRUB: 42600,
+  billingType: "取大",
+  volumetricDivisor: 12000,
+};
+const preciseSuggestionCommission = {
+  primaryCategory: "测试一级",
+  secondaryCategory: "测试二级",
+  tiers: [
+    { min: 0, max: 1500, rate: 8 },
+    { min: 1500.01, max: 5000, rate: 13 },
+    { min: 5000.01, max: Infinity, rate: 18 },
+  ],
+};
+const preciseSuggestion = calculateSuggestedPrice(
+  [preciseSuggestionChannel],
+  preciseSuggestionInput.exchangeRate,
+  "RMB",
+  preciseSuggestionInput,
+  preciseSuggestionCommission,
+  20
+);
+const preciseSuggestionResult = performFullCalculation(
+  { ...preciseSuggestionInput, targetPriceRMB: preciseSuggestion.suggestedPriceRMB },
+  preciseSuggestionCommission,
+  preciseSuggestionChannel
+);
+assertEqual(
+  preciseSuggestionResult.profitMargin >= 20,
+  true,
+  "profit-aware suggested price should not round below target margin"
+);
+
 const rubLimitSuggestion = calculateSuggestedPrice(
   [{ ...baseSuggestionChannel, minValueRUB: 240, minValue: 5 }],
   12,
@@ -365,6 +509,52 @@ const cpcSalesPercentResult = performFullCalculation(
 assertApproxEqual(cpcSalesPercentResult.costs.cpcCost, 14, "full calculation uses CPC sales percent cost");
 assertApproxEqual(cpcSalesPercentResult.adRiskControl.currentACOS, 10, "ACOS includes CPC sales percent and CPA");
 
+const variableCpcReverseInput = {
+  ...baseSuggestionInput,
+  length: 33,
+  width: 14,
+  height: 30,
+  weight: 2378,
+  purchaseCost: 89,
+  domesticShipping: 22,
+  packagingFee: 0,
+  returnRate: 18,
+  cpaEnabled: true,
+  cpaRate: 22,
+  cpcEnabled: true,
+  cpcBillingMode: "salesPercent",
+  cpcSalesPercent: 12,
+  targetPriceRMB: 428,
+  exchangeRate: 11,
+  withdrawalFee: 4.8,
+  paymentFee: 2,
+};
+const variableCpcChannel = {
+  ...baseSuggestionChannel,
+  fixFee: 3.2,
+  varFeePerGram: 0.028,
+  billingType: "取大",
+  volumetricDivisor: 12000,
+};
+const variableCpcCommission = {
+  primaryCategory: "测试一级",
+  secondaryCategory: "测试二级",
+  tiers: [
+    { min: 0, max: 1500, rate: 8 },
+    { min: 1500.01, max: 5000, rate: 13 },
+    { min: 5000.01, max: Infinity, rate: 18 },
+  ],
+};
+const variableCpcReverse = reversePriceFromMargin(30, variableCpcReverseInput, variableCpcCommission, variableCpcChannel);
+const variableCpcForward = performFullCalculation(
+  { ...variableCpcReverseInput, targetPriceRMB: variableCpcReverse.priceRMB },
+  variableCpcCommission,
+  variableCpcChannel
+);
+assertApproxEqual(variableCpcForward.profitMargin, 30, "reverse price should include variable CPC in target sales margin", 0.05);
+const impossibleVariableCpcReverse = reversePriceFromMargin(45, variableCpcReverseInput, variableCpcCommission, variableCpcChannel);
+assertEqual(Boolean(impossibleVariableCpcReverse.error), true, "reverse price should reject impossible target margin after variable CPC");
+
 const modeCommission = {
   ...suggestionCommission,
   modeTiers: {
@@ -387,6 +577,30 @@ assertEqual(fbpModeResult.commissionRate, 6, "FBP mode should use FBP commission
 if (fbpModeResult.netProfit <= rfbsModeResult.netProfit) {
   throw new Error("FBP lower commission should improve net profit in mode regression");
 }
+
+const malformedModeCommission = {
+  ...petCarryBagCommission,
+  modeTiers: {
+    RFBS: petCarryBagCommission.tiers,
+    FBP: [],
+  },
+};
+assertEqual(getCommissionRate(malformedModeCommission, 1500, "FBP"), 12, "empty FBP mode tiers should fall back to RFBS tiers");
+assertEqual(
+  getCommissionRate({ ...petCarryBagCommission, modeTiers: { RFBS: [] } }, 1500, "FBP"),
+  12,
+  "empty RFBS mode tiers should fall back to legacy tiers"
+);
+
+const nullMaxCommission = {
+  primaryCategory: "测试一级",
+  secondaryCategory: "空上限阶梯",
+  tiers: [
+    { min: 0, max: 1500, rate: 10 },
+    { min: 1500.01, max: null, rate: 20 },
+  ],
+};
+assertEqual(getCommissionRate(nullMaxCommission, 6000, "RFBS"), 20, "null max commission tier should mean no upper limit");
 
 assertDeepEqual(
   parseShippingRateString("¥3.12 + ¥0.0468/1 g"),
@@ -546,6 +760,10 @@ assertEqual(isProfitMarginBelowThreshold(20, 20), false, "profit threshold shoul
 assertEqual(isProfitMarginBelowThreshold(19.96, 20), false, "profit threshold should use one-decimal display rounding");
 assertEqual(isProfitMarginBelowThreshold(19.94, 20), true, "profit threshold should warn below display threshold");
 assertEqual(isProfitMarginBelowThreshold(20.04, 20), false, "profit threshold should not warn above threshold");
+assertEqual(normalizePromotionDiscount(-5), 0, "promotion discount should not go below 0%");
+assertEqual(normalizePromotionDiscount(100), 99, "promotion discount should be capped below 100%");
+assertEqual(Number.isFinite(calculateOriginalPrice(100, 100)), true, "original price should stay finite at invalid 100% discount");
+assertApproxEqual(calculateOriginalPrice(100, 25), 133.33333333333334, "original price should reverse valid promotion discount");
 
 const adCommission = {
   primaryCategory: "Test",
@@ -612,9 +830,97 @@ assertEqual(exchangeStress.at5PercentDrop < 40, true, "5% worse exchange rate sh
 assertEqual(exchangeStress.at10PercentDrop < exchangeStress.at5PercentDrop, true, "10% worse exchange rate should reduce profit more than 5%");
 assertApproxEqual(exchangeStress.zeroProfitRate, 18, "zero-profit exchange rate should be expressed as 1 CNY = N RUB");
 
+const cpcStress = calculateExchangeRateStressTest(200, 10, adCommission, 0, 0, 60, 0, 12, "RFBS");
+const expectedCpcStress5 = calculateNetProfit(200 / 1.05, calculateMarginalContribution(10, 0, 0, 0), 60 + (200 / 1.05) * 0.12);
+assertApproxEqual(cpcStress.at5PercentDrop, expectedCpcStress5, "exchange stress should include sales-percent CPC at stressed RMB revenue");
+
+const marginStrategyCommission = {
+  primaryCategory: "Test",
+  secondaryCategory: "Test",
+  tiers: [{ min: 0, max: Infinity, rate: 10 }],
+};
+const marginStrategies = calculatePricingStrategies(marginStrategyCommission, 10, 0, 0, 50, 0, 0, "RFBS");
+assertApproxEqual(marginStrategies.breakEven, 55.56, "pricing strategy break-even should target 0% sales margin", 0.01);
+assertApproxEqual(marginStrategies.lowProfit, 62.5, "pricing strategy low profit should target 10% sales margin", 0.01);
+assertApproxEqual(marginStrategies.mediumProfit, 71.43, "pricing strategy medium profit should target 20% sales margin", 0.01);
+assertApproxEqual(marginStrategies.highProfit, 83.34, "pricing strategy high profit should target 30% sales margin", 0.01);
+
 const zeroFeePricing = calculateSixTierPricing({ ...baseAdInput, cpaEnabled: false, cpaRate: 0 }, adCommission, undefined);
 assertEqual(zeroFeePricing[0].disabled, false, "six-tier pricing should calculate with zero withdrawal fee");
 assertApproxEqual(zeroFeePricing[0].priceRMB, 42.11, "six-tier pricing should preserve explicit 0% withdrawal fee", 0.01);
+
+const multiItemSingle = calculateMultiItemProfit(1, { ...baseSuggestionInput, targetPriceRMB: 100 }, baseSuggestionChannel, suggestionCommission);
+const multiItemFull = performFullCalculation({ ...baseSuggestionInput, targetPriceRMB: 100 }, suggestionCommission, baseSuggestionChannel);
+assertApproxEqual(multiItemSingle.profitPerItem, multiItemFull.netProfit, "multi-item count 1 should match full calculation net profit");
+assertApproxEqual(multiItemSingle.profitMargin, multiItemFull.profitMargin, "multi-item count 1 should match full calculation margin");
+
+const multiItemInput = {
+  ...baseSuggestionInput,
+  targetPriceRMB: 120,
+  cpcEnabled: true,
+  cpcBillingMode: "salesPercent",
+  cpcSalesPercent: 6,
+  returnRate: 10,
+};
+const multiItemCount = 5;
+const multiItemResult = calculateMultiItemProfit(multiItemCount, multiItemInput, baseSuggestionChannel, suggestionCommission);
+const multiItemChargeableWeight = getChargeableWeight(
+  multiItemInput.length,
+  multiItemInput.width,
+  multiItemInput.height,
+  multiItemInput.weight,
+  baseSuggestionChannel
+).chargeable;
+const multiItemShippingPerItem = calculateShippingCost(baseSuggestionChannel, multiItemChargeableWeight * multiItemCount) / multiItemCount;
+const multiItemReturnCost = calculateReturnCost(
+  multiItemInput.returnHandling,
+  multiItemInput.returnRate,
+  multiItemInput.purchaseCost,
+  multiItemInput.domesticShipping,
+  multiItemShippingPerItem
+);
+const multiItemCpcCost = calculateCpcCost(
+  multiItemInput.cpcEnabled,
+  multiItemInput.cpcBid,
+  multiItemInput.cpcConversionRate,
+  multiItemInput.exchangeRate,
+  multiItemInput.cpcBillingMode,
+  multiItemInput.cpcSalesPercent,
+  multiItemInput.targetPriceRMB
+);
+const multiItemRate = getCommissionRate(suggestionCommission, multiItemInput.targetPriceRMB * multiItemInput.exchangeRate, multiItemInput.fulfillmentMode);
+const multiItemM = calculateMarginalContribution(
+  multiItemRate,
+  multiItemInput.withdrawalFee,
+  multiItemInput.cpaEnabled ? multiItemInput.cpaRate : 0,
+  multiItemInput.paymentFee
+);
+const multiItemFixedCost =
+  multiItemInput.purchaseCost +
+  multiItemInput.domesticShipping +
+  multiItemInput.packagingFee +
+  multiItemShippingPerItem +
+  multiItemCpcCost +
+  multiItemReturnCost;
+const expectedMultiItemProfitPerItem = calculateNetProfit(multiItemInput.targetPriceRMB, multiItemM, multiItemFixedCost);
+assertApproxEqual(multiItemResult.profitPerItem, expectedMultiItemProfitPerItem, "multi-item profit should use shared shipping per item");
+assertApproxEqual(multiItemResult.totalProfit, expectedMultiItemProfitPerItem * multiItemCount, "multi-item total profit should equal per-item profit times count");
+
+const multiItemZeroCount = calculateMultiItemProfit(0, multiItemInput, baseSuggestionChannel, suggestionCommission);
+assertEqual(Number.isFinite(multiItemZeroCount.profitPerItem), true, "multi-item count 0 should not produce infinite profit");
+assertApproxEqual(
+  multiItemZeroCount.profitPerItem,
+  calculateMultiItemProfit(1, multiItemInput, baseSuggestionChannel, suggestionCommission).profitPerItem,
+  "multi-item count 0 should be normalized to one item"
+);
+
+const cappedTaxSimulation = calculateTaxSimulation(
+  { ...baseSuggestionInput, targetPriceRMB: 100, purchaseCost: 40, domesticShipping: 10, packagingFee: 5, taxEnabled: true, vatRate: 150, corporateTaxRate: 200 },
+  30
+);
+assertApproxEqual(cappedTaxSimulation.outputVat, 100, "VAT rate above 100% should be capped at 100%");
+assertApproxEqual(cappedTaxSimulation.inputVatCredit, 55, "input VAT credit should use capped VAT rate");
+assertApproxEqual(cappedTaxSimulation.corporateTax, 0, "corporate tax rate above 100% should not create impossible over-tax on non-positive taxable profit");
 
 const newShippingWorkbook = "E:\\CodexProjects\\China_scoring_ENG_CN_20_05_2026_1779193810.xlsx";
 if (fs.existsSync(newShippingWorkbook)) {

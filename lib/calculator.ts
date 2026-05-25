@@ -30,6 +30,34 @@ function parseFiniteNumber(value: number, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function hasCommissionTiers(tiers: CommissionTier[] | undefined): tiers is CommissionTier[] {
+  return Array.isArray(tiers) && tiers.length > 0;
+}
+
+function normalizeTierMin(tier: CommissionTier): number {
+  const parsed = parseFloat(String(tier.min));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeTierMax(tier: CommissionTier): number {
+  const rawMax = (tier as { max?: unknown }).max;
+  if (rawMax === null || rawMax === undefined) return Infinity;
+  const parsed = parseFloat(String(rawMax));
+  return Number.isFinite(parsed) ? parsed : Infinity;
+}
+
+function normalizePercent(value: number, max: number = 100): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(max, Math.max(0, parsed));
+}
+
+function normalizeShippingLimit(value: number | undefined): number | undefined {
+  return value !== undefined && value !== null && Number.isFinite(value) && value > 0 && value < 999999
+    ? value
+    : undefined;
+}
+
 // 佣金阶梯边界常量（RUB）
 const TIER_BOUNDARIES = [
   { min: 0, max: 1500 },
@@ -53,7 +81,13 @@ export function getCommissionTiersForMode(
   commission: CategoryCommission,
   fulfillmentMode: FulfillmentMode = "RFBS"
 ): CommissionTier[] {
-  return commission.modeTiers?.[fulfillmentMode] || commission.modeTiers?.RFBS || commission.tiers;
+  const modeTiers = commission.modeTiers?.[fulfillmentMode];
+  if (hasCommissionTiers(modeTiers)) return modeTiers;
+
+  const rfbsTiers = commission.modeTiers?.RFBS;
+  if (hasCommissionTiers(rfbsTiers)) return rfbsTiers;
+
+  return hasCommissionTiers(commission.tiers) ? commission.tiers : [];
 }
 
 export function normalizeCommissionPriceRUB(priceRUB: number): number {
@@ -67,16 +101,20 @@ export function getCommissionTierForPrice(
   fulfillmentMode: FulfillmentMode = "RFBS"
 ): CommissionTier {
   const tiers = getCommissionTiersForMode(commission, fulfillmentMode);
+  if (tiers.length === 0) {
+    return { min: 0, max: Infinity, rate: 0 };
+  }
+
   const normalizedPriceRUB = normalizeCommissionPriceRUB(priceRUB);
 
   for (const tier of tiers) {
-    if (normalizedPriceRUB >= tier.min && normalizedPriceRUB <= tier.max) {
+    if (normalizedPriceRUB >= normalizeTierMin(tier) && normalizedPriceRUB <= normalizeTierMax(tier)) {
       return tier;
     }
   }
 
-  const sortedTiers = [...tiers].sort((a, b) => a.min - b.min);
-  return sortedTiers.find((tier) => normalizedPriceRUB <= tier.max) || sortedTiers[sortedTiers.length - 1];
+  const sortedTiers = [...tiers].sort((a, b) => normalizeTierMin(a) - normalizeTierMin(b));
+  return sortedTiers.find((tier) => normalizedPriceRUB <= normalizeTierMax(tier)) || sortedTiers[sortedTiers.length - 1];
 }
 
 /**
@@ -274,6 +312,10 @@ export function reversePriceFromMargin(
 ): { priceRMB: number; commissionRate: number; error?: string } {
   
   const T_m = targetMarginPercent / 100;
+  const variableCpcRate =
+    input.cpcEnabled && (input.cpcBillingMode || "bidCvr") === "salesPercent"
+      ? Math.max(0, input.cpcSalesPercent || 0) / 100
+      : 0;
   
   // 1. 计算不依赖售价的固定成本部分
   const purchaseCost = input.purchaseCost;
@@ -306,12 +348,13 @@ export function reversePriceFromMargin(
     const cpaRateForM = input.cpaEnabled ? input.cpaRate : 0;
     const M = calculateMarginalContribution(commissionRate, input.withdrawalFee, cpaRateForM, input.paymentFee);
     
-    // 熔断检测：M - T_m <= 0
-    if (M <= T_m) {
+    // 熔断检测：销售额比例 CPC 会占用利润率空间，必须进入反推分母。
+    const denominator = M - T_m - variableCpcRate;
+    if (denominator <= 0) {
       return {
         priceRMB: 0,
         commissionRate,
-        error: `目标利润率过高！当前佣金${commissionRate}%、广告率${cpaRateForM}%、提现手续费${input.withdrawalFee}%、支付手续费${input.paymentFee || 0}%已占据过多空间，最大可实现利润率为 ${((M) * 100).toFixed(1)}%`
+        error: `目标利润率过高！当前佣金${commissionRate}%、广告率${cpaRateForM}%、CPC销售额占比${(variableCpcRate * 100).toFixed(1)}%、提现手续费${input.withdrawalFee}%、支付手续费${input.paymentFee || 0}%已占据过多空间，最大可实现利润率为 ${((M - variableCpcRate) * 100).toFixed(1)}%`
       };
     }
     
@@ -321,14 +364,14 @@ export function reversePriceFromMargin(
     // 计算退货成本
     const returnCost = calcReturnCost(internationalShipping);
     
-    // 按销售额比例计费的 CPC 会随试算售价变化，必须在迭代内计算。
-    const cpcCost = calculateInputCpcCost(input, currentPriceRMB);
+    // 固定 CPC 进入固定成本；销售额比例 CPC 已进入分母，避免反推价偏低。
+    const cpcCost = variableCpcRate > 0 ? 0 : calculateInputCpcCost(input, currentPriceRMB);
     
     // 计算总固定成本 F_total
     const F_total = purchaseCost + domesticShipping + packagingFee + internationalShipping + cpcCost + returnCost;
     
-    // 逆向公式：P_rmb = F_total / (M - T_m)
-    currentPriceRMB = F_total / (M - T_m);
+    // 逆向公式：P_rmb = F_total / (M - T_m - CPC销售额占比)
+    currentPriceRMB = F_total / denominator;
     
     // 边界保护
     if (!isFinite(currentPriceRMB) || currentPriceRMB < 0) {
@@ -351,23 +394,24 @@ export function reversePriceFromMargin(
   if (!validation.valid) {
     // 跨阶梯了，再迭代一轮
     const M = calculateMarginalContribution(finalCommissionRate, input.withdrawalFee, input.cpaEnabled ? input.cpaRate : 0, input.paymentFee);
-    if (M <= T_m) {
+    const denominator = M - T_m - variableCpcRate;
+    if (denominator <= 0) {
       return {
         priceRMB: 0,
         commissionRate: finalCommissionRate,
-        error: `目标利润率过高！最大可实现利润率为 ${((M) * 100).toFixed(1)}%`
+        error: `目标利润率过高！最大可实现利润率为 ${((M - variableCpcRate) * 100).toFixed(1)}%`
       };
     }
     
     const internationalShipping = shippingChannel ? calculateShippingCost(shippingChannel, chargeableWeight) : 0;
     const returnCost = calcReturnCost(internationalShipping);
-    const cpcCost = calculateInputCpcCost(input, currentPriceRMB);
+    const cpcCost = variableCpcRate > 0 ? 0 : calculateInputCpcCost(input, currentPriceRMB);
     const F_total = purchaseCost + domesticShipping + packagingFee + internationalShipping + cpcCost + returnCost;
-    currentPriceRMB = F_total / (M - T_m);
+    currentPriceRMB = F_total / denominator;
   }
   
   return {
-    priceRMB: parseFloat(currentPriceRMB.toFixed(2)),
+    priceRMB: Math.ceil((currentPriceRMB - Number.EPSILON) * 100) / 100,
     commissionRate: finalCommissionRate,
     error: undefined
   };
@@ -573,25 +617,21 @@ export function calculatePricingStrategies(
     highProfit: 0,
   };
 
-  const profitTargets = [
-    0,
-    totalFixedCost * 0.1 / 0.9,
-    totalFixedCost * 0.2 / 0.8,
-    totalFixedCost * 0.3 / 0.7,
-  ];
+  const targetMargins = [0, 0.1, 0.2, 0.3];
 
   const labels = ["breakEven", "lowProfit", "mediumProfit", "highProfit"] as const;
 
-  for (let i = 0; i < profitTargets.length; i++) {
-    const targetProfit = profitTargets[i];
+  for (let i = 0; i < targetMargins.length; i++) {
+    const targetMargin = targetMargins[i];
     let validPriceRMB = Infinity;
 
     for (const tier of getCommissionTiersForMode(commission, fulfillmentMode)) {
       const M = calculateMarginalContribution(tier.rate, withdrawalFee, cpaRate, paymentFee) - (cpcSalesPercent / 100);
-      if (M <= 0) continue;
+      const denominator = M - targetMargin;
+      if (denominator <= 0) continue;
 
-      // 逆向求 P_rmb
-      const P_rmb = (totalFixedCost + targetProfit) / M;
+      // 按销售利润率反推售价：P_rmb * M - F = P_rmb * 目标利润率。
+      const P_rmb = totalFixedCost / denominator;
       // 转换为 P_rub 验证是否在当前阶梯区间
       const matchedTier = getCommissionTierForPrice(commission, cnyToRub(P_rmb, exchangeRate), fulfillmentMode);
 
@@ -627,7 +667,8 @@ export function detectCommissionBlackHole(
   for (const tier of getCommissionTiersForMode(commission, fulfillmentMode)) {
     if (tier.rate < currentRate) {
       // 将售价降到该阶梯的最大值（RUB），再转回 RMB
-      const lowerPriceRUB = tier.max;
+      const lowerPriceRUB = normalizeTierMax(tier);
+      if (!Number.isFinite(lowerPriceRUB)) continue;
       const lowerPriceRMB = rubToCny(lowerPriceRUB, exchangeRate);
       const M_lower = calculateMarginalContribution(tier.rate, withdrawalFee, cpaRate, paymentFee);
       const M_current = calculateMarginalContribution(currentRate, withdrawalFee, cpaRate, paymentFee);
@@ -810,11 +851,11 @@ export function calculateMultiItemProfit(
   shippingChannel: ShippingChannel,
   commission: CategoryCommission
 ): { profitPerItem: number; totalProfit: number; profitMargin: number } {
+  const normalizedItemCount = Math.max(1, Math.floor(Number.isFinite(itemCount) ? itemCount : 1));
   const chargeableWeight = getChargeableWeight(input.length, input.width, input.height, input.weight, shippingChannel).chargeable;
-  const singleShippingCost = calculateShippingCost(shippingChannel, chargeableWeight);
-  const totalWeight = chargeableWeight * itemCount;
+  const totalWeight = chargeableWeight * normalizedItemCount;
   const totalShippingCost = calculateShippingCost(shippingChannel, totalWeight);
-  const shippingPerItem = totalShippingCost / itemCount;
+  const shippingPerItem = totalShippingCost / normalizedItemCount;
 
   const returnCost = calculateReturnCost(
     input.returnHandling,
@@ -838,8 +879,8 @@ export function calculateMultiItemProfit(
   }
 
   const profitPerItem = calculateNetProfit(input.targetPriceRMB, M, totalFixedCost);
-  const totalProfit = profitPerItem * itemCount;
-  const revenue = input.targetPriceRMB * itemCount;
+  const totalProfit = profitPerItem * normalizedItemCount;
+  const revenue = input.targetPriceRMB * normalizedItemCount;
   const profitMargin = revenue > 0 ? (totalProfit / revenue) * 100 : 0;
 
   return { profitPerItem, totalProfit, profitMargin };
@@ -853,8 +894,12 @@ export function calculateOriginalPrice(
   sellingPriceRMB: number,
   promotionDiscount: number
 ): number {
-  if (promotionDiscount >= 100) return Infinity;
-  return sellingPriceRMB / (1 - promotionDiscount / 100);
+  const discount = normalizePromotionDiscount(promotionDiscount);
+  return sellingPriceRMB / (1 - discount / 100);
+}
+
+export function normalizePromotionDiscount(promotionDiscount: number): number {
+  return normalizePercent(promotionDiscount, 99);
 }
 
 /**
@@ -980,14 +1025,16 @@ export function calculateTaxSimulation(
   preTaxNetProfit: number
 ): CalculationResult["taxes"] {
   const enabled = input.taxEnabled === true;
-  const vatRate = Math.max(0, input.vatRate || 0) / 100;
-  const corporateTaxRate = Math.max(0, input.corporateTaxRate || 0) / 100;
+  const normalizedVatRate = normalizePercent(input.vatRate || 0);
+  const normalizedCorporateTaxRate = normalizePercent(input.corporateTaxRate || 0);
+  const vatRate = normalizedVatRate / 100;
+  const corporateTaxRate = normalizedCorporateTaxRate / 100;
 
   if (!enabled) {
     return {
       enabled: false,
-      vatRate: input.vatRate || 0,
-      corporateTaxRate: input.corporateTaxRate || 0,
+      vatRate: normalizedVatRate,
+      corporateTaxRate: normalizedCorporateTaxRate,
       outputVat: 0,
       inputVatCredit: 0,
       vatPayable: 0,
@@ -1007,8 +1054,8 @@ export function calculateTaxSimulation(
 
   return {
     enabled,
-    vatRate: input.vatRate || 0,
-    corporateTaxRate: input.corporateTaxRate || 0,
+    vatRate: normalizedVatRate,
+    corporateTaxRate: normalizedCorporateTaxRate,
     outputVat,
     inputVatCredit,
     vatPayable,
@@ -1044,7 +1091,7 @@ export function detectCommissionTierBoundary(
   const normalizedPriceRUB = normalizeCommissionPriceRUB(priceRUB);
   const tiers = getCommissionTiersForMode(commission, fulfillmentMode);
   const boundaries = tiers
-    .map((tier) => tier.max)
+    .map((tier) => normalizeTierMax(tier))
     .filter((max): max is number => Number.isFinite(max))
     .sort((a, b) => a - b);
   
@@ -1160,16 +1207,45 @@ export function detectShippingDimensionLimits(
   
   if (!shippingChannel) return warnings;
   
-  // 🔹 检测长边限制（三边中最长的边）
-  const longEdge = Math.max(length, width, height);
-  const maxLongEdge = Math.max(
-    shippingChannel.maxLength,
-    shippingChannel.maxWidth,
-    shippingChannel.maxHeight
-  );
-  
-  if (maxLongEdge > 0 && longEdge > 0) {
-    if (longEdge >= maxLongEdge * 0.95 && longEdge <= maxLongEdge) {
+  // 包裹可以旋转，尺寸预警必须和物流拦截一样按三边排序后比较。
+  const productDims = [length, width, height].filter((value) => value > 0).sort((a, b) => b - a);
+  const channelDims = [
+    normalizeShippingLimit(shippingChannel.maxLength),
+    normalizeShippingLimit(shippingChannel.maxWidth),
+    normalizeShippingLimit(shippingChannel.maxHeight),
+  ];
+
+  if (productDims.length === 3 && channelDims.every((limit) => limit !== undefined)) {
+    const sortedChannelDims = (channelDims as number[]).sort((a, b) => b - a);
+    const checks = [
+      { label: "长边", current: productDims[0], limit: sortedChannelDims[0] },
+      { label: "中间边", current: productDims[1], limit: sortedChannelDims[1] },
+      { label: "短边", current: productDims[2], limit: sortedChannelDims[2] },
+    ];
+
+    const exceeded = checks.find((check) => check.current > check.limit);
+    if (exceeded) {
+      warnings.push({
+        type: 'longEdge',
+        current: exceeded.current,
+        limit: exceeded.limit,
+        warning: `🚫 ${exceeded.label}超出物流限制！当前 ${exceeded.current} cm，最大 ${exceeded.limit} cm`
+      });
+    } else {
+      const nearLimit = checks.find((check) => check.current >= check.limit * 0.95);
+      if (nearLimit) {
+        warnings.push({
+          type: 'longEdge',
+          current: nearLimit.current,
+          limit: nearLimit.limit,
+          warning: `⚠️ ${nearLimit.label}接近物流限制 (${nearLimit.current}/${nearLimit.limit} cm)`
+        });
+      }
+    }
+  } else {
+    const longEdge = productDims[0] || 0;
+    const maxLongEdge = Math.max(...channelDims.filter((limit): limit is number => limit !== undefined));
+    if (Number.isFinite(maxLongEdge) && maxLongEdge > 0 && longEdge > 0 && longEdge >= maxLongEdge * 0.95 && longEdge <= maxLongEdge) {
       warnings.push({
         type: 'longEdge',
         current: longEdge,
@@ -1177,7 +1253,7 @@ export function detectShippingDimensionLimits(
         warning: `⚠️ 长边接近物流限制 (${longEdge}/${maxLongEdge} cm)`
       });
     }
-    if (longEdge > maxLongEdge) {
+    if (Number.isFinite(maxLongEdge) && maxLongEdge > 0 && longEdge > maxLongEdge) {
       warnings.push({
         type: 'longEdge',
         current: longEdge,
@@ -1187,53 +1263,24 @@ export function detectShippingDimensionLimits(
     }
   }
   
-  const dimensions = [
-    { type: 'length' as const, value: length, limit: shippingChannel.maxLength },
-    { type: 'width' as const, value: width, limit: shippingChannel.maxWidth },
-    { type: 'height' as const, value: height, limit: shippingChannel.maxHeight },
-  ];
-  
-  // 检测单边长度
-  for (const dim of dimensions) {
-    if (dim.limit > 0 && dim.value > 0) {
-      // 超过限制的 95% 时预警
-      if (dim.value >= dim.limit * 0.95 && dim.value <= dim.limit) {
-        warnings.push({
-          type: dim.type,
-          current: dim.value,
-          limit: dim.limit,
-          warning: `⚠️ ${dim.type === 'length' ? '长度' : dim.type === 'width' ? '宽度' : '高度'}接近物流限制 (${dim.value}/${dim.limit} cm)`
-        });
-      }
-      // 超过限制
-      if (dim.value > dim.limit) {
-        warnings.push({
-          type: dim.type,
-          current: dim.value,
-          limit: dim.limit,
-          warning: `🚫 ${dim.type === 'length' ? '长度' : dim.type === 'width' ? '宽度' : '高度'}超出物流限制！当前 ${dim.value} cm，最大 ${dim.limit} cm`
-        });
-      }
-    }
-  }
-  
   // 检测边长总和
   const sumDimension = length + width + height;
-  if (shippingChannel.maxSumDimension > 0 && sumDimension > 0) {
-    if (sumDimension >= shippingChannel.maxSumDimension * 0.95 && sumDimension <= shippingChannel.maxSumDimension) {
+  const maxSumDimension = normalizeShippingLimit(shippingChannel.maxSumDimension);
+  if (maxSumDimension !== undefined && sumDimension > 0) {
+    if (sumDimension >= maxSumDimension * 0.95 && sumDimension <= maxSumDimension) {
       warnings.push({
         type: 'sum',
         current: sumDimension,
-        limit: shippingChannel.maxSumDimension,
-        warning: `⚠️ 边长总和接近限制 (${sumDimension}/${shippingChannel.maxSumDimension} cm)`
+        limit: maxSumDimension,
+        warning: `⚠️ 边长总和接近限制 (${sumDimension}/${maxSumDimension} cm)`
       });
     }
-    if (sumDimension > shippingChannel.maxSumDimension) {
+    if (sumDimension > maxSumDimension) {
       warnings.push({
         type: 'sum',
         current: sumDimension,
-        limit: shippingChannel.maxSumDimension,
-        warning: `🚫 边长总和超出限制！当前 ${sumDimension} cm，最大 ${shippingChannel.maxSumDimension} cm`
+        limit: maxSumDimension,
+        warning: `🚫 边长总和超出限制！当前 ${sumDimension} cm，最大 ${maxSumDimension} cm`
       });
     }
   }
