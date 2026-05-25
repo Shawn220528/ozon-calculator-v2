@@ -28,6 +28,12 @@ import {
 import { parseAlternativeShippingRows } from "./shipping-alternative-parsing";
 import { isSkippableShippingRow, selectShippingSheetName } from "./shipping-workbook";
 import { parseEuropeanNumber } from "./number-parsing";
+import {
+  clearImportedDataset,
+  loadImportedDataset,
+  saveImportedDataset,
+  type ImportedDatasetMeta,
+} from "./persistent-data-store";
 
 // 佣金阶梯金额边界
 const TIER_BOUNDARIES = [
@@ -54,6 +60,11 @@ interface DataHubContextType {
   columnMapping: ColumnMapping;
   interceptionConfig: Record<string, boolean>; // 🔹 拦截配置
   lastImportSummary: ImportSummary | null;
+  importedDataMeta: {
+    commission: ImportedDatasetMeta | null;
+    shipping: ImportedDatasetMeta | null;
+    lastPersistenceError: string | null;
+  };
   loadCommissionData: (file: File, mode?: "overwrite" | "merge", mappingOverride?: Record<string, number>) => Promise<ImportSummary>;
   loadShippingData: (file: File, mode?: "overwrite" | "merge", mappingOverride?: Record<string, number>) => Promise<ImportSummary>;
   clearCommissionData: () => void;
@@ -314,6 +325,7 @@ function parseDeliveryTime(timeStr: string): { min: number; max: number } {
 // Provider
 // ========================================================
 export function DataHubProvider({ children }: { children: React.ReactNode }) {
+  const DATA_VERSION = "v2.5";
   const [commissionData, setCommissionData] = useState<CategoryCommission[]>(DEFAULT_COMMISSION_DATA);
   const [shippingData, setShippingData] = useState<ShippingChannel[]>(DEFAULT_SHIPPING_DATA);
   const [commissionLoaded, setCommissionLoaded] = useState(true);
@@ -323,6 +335,15 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
     shipping: {},
   });
   const [lastImportSummary, setLastImportSummary] = useState<ImportSummary | null>(null);
+  const [importedDataMeta, setImportedDataMeta] = useState<{
+    commission: ImportedDatasetMeta | null;
+    shipping: ImportedDatasetMeta | null;
+    lastPersistenceError: string | null;
+  }>({
+    commission: null,
+    shipping: null,
+    lastPersistenceError: null,
+  });
   
   // 🔹 拦截配置状态（从 localStorage 恢复）
   const [interceptionConfig, setInterceptionConfig] = useState<Record<string, boolean>>({});
@@ -340,85 +361,185 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
   useEffect(() => {
-    try {
-      // 🔹 数据版本控制：兼容迁移而非暴力清除
-      const DATA_VERSION = "v2.4"; // 兼容升级，共享物流解析器与人民币/卢布货值摘要
-      const savedVersion = localStorage.getItem("ozon_data_version");
-      
-      // 🔹 先读取所有数据，避免作用域问题
-      const savedCommission = localStorage.getItem("ozon_commission_data");
-      const savedShipping = localStorage.getItem("ozon_shipping_data");
-      const savedMapping = localStorage.getItem("ozon_column_mapping");
-      
-      const isMajorUpgrade = Boolean(savedVersion && !savedVersion.startsWith("v2"));
+    let cancelled = false;
 
-      if (savedVersion !== DATA_VERSION) {
-        // 🔴 修复：版本升级时不再暴力清除，而是保留用户数据
-        // 仅在数据格式完全不兼容时才清除（如 v1.x → v2.x）
-        if (isMajorUpgrade) {
-          localStorage.removeItem("ozon_commission_data");
-          localStorage.removeItem("ozon_shipping_data");
-          localStorage.removeItem("ozon_column_mapping");
-        }
-        // 更新版本号
+    const normalizeShippingForRestore = (items: ShippingChannel[]) => {
+      const seen = new Map<string, number>();
+      return items.map((item, index) => {
+        const baseId = item.id || generateShippingUniqueId(item.name || `channel-${index}`, item.serviceLevel || "");
+        const count = seen.get(baseId) || 0;
+        seen.set(baseId, count + 1);
+        return {
+          ...item,
+          id: count > 0 ? `${baseId}_${count + 1}` : baseId,
+          volumetricDivisor: item.volumetricDivisor !== undefined && item.volumetricDivisor < 1000 ? 12000 : item.volumetricDivisor,
+        };
+      });
+    };
+
+    const restore = async () => {
+      try {
         safeLocalStorageSet("ozon_data_version", DATA_VERSION);
-      }
 
-      if (!isMajorUpgrade) {
-        if (savedCommission) {
-          const parsed = JSON.parse(savedCommission);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setCommissionData(parsed);
-            setCommissionLoaded(true);
-          }
-        }
-        
-        if (savedShipping) {
-          const parsed = JSON.parse(savedShipping);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // 🔴 强制修复：如果 volumetricDivisor < 1000，重写为 12000
-            const fixedParsed = parsed.map((item: ShippingChannel) => {
-              if (item.volumetricDivisor !== undefined && item.volumetricDivisor < 1000) {
-                return { ...item, volumetricDivisor: 12000 };
-              }
-              return item;
-            });
-            
-            // 检查并修复重复ID
-            const idSet = new Set<string>();
-            const hasDuplicates = fixedParsed.some((item: ShippingChannel) => {
-              if (idSet.has(item.id)) return true;
-              idSet.add(item.id);
-              return false;
-            });
-            
-            if (hasDuplicates) {
-              localStorage.removeItem("ozon_shipping_data");
-              setShippingData(DEFAULT_SHIPPING_DATA);
-            } else {
-              setShippingData(fixedParsed);
-              // 如果有修复，更新 localStorage
-              const hasFixed = fixedParsed.some((item: ShippingChannel, i: number) => 
-                item.volumetricDivisor !== parsed[i].volumetricDivisor
-              );
-              if (hasFixed) {
-                safeLocalStorageSet("ozon_shipping_data", JSON.stringify(fixedParsed));
-              }
-            }
-          }
-        }
-        
+        const savedMapping = localStorage.getItem("ozon_column_mapping");
         if (savedMapping) {
           const parsed = JSON.parse(savedMapping);
           if (parsed.commission && parsed.shipping) {
             setColumnMapping(parsed);
           }
         }
+
+        let commissionMeta: ImportedDatasetMeta | null = null;
+        let shippingMeta: ImportedDatasetMeta | null = null;
+        let restoredCommission = false;
+        let restoredShipping = false;
+
+        try {
+          const indexedCommission = await loadImportedDataset<CategoryCommission[]>("commission");
+          if (!cancelled && indexedCommission?.data.length) {
+            setCommissionData(indexedCommission.data);
+            setCommissionLoaded(true);
+            commissionMeta = indexedCommission.meta;
+            restoredCommission = true;
+          }
+        } catch (error) {
+          console.warn("[数据中心] IndexedDB 佣金数据恢复失败，继续尝试 localStorage:", error);
+        }
+
+        try {
+          const indexedShipping = await loadImportedDataset<ShippingChannel[]>("shipping");
+          if (!cancelled && indexedShipping?.data.length) {
+            const fixedShipping = normalizeShippingForRestore(indexedShipping.data);
+            setShippingData(fixedShipping);
+            setShippingLoaded(true);
+            shippingMeta = indexedShipping.meta;
+            restoredShipping = true;
+          }
+        } catch (error) {
+          console.warn("[数据中心] IndexedDB 物流数据恢复失败，继续尝试 localStorage:", error);
+        }
+
+        if (!restoredCommission) {
+          const savedCommission = localStorage.getItem("ozon_commission_data");
+          if (savedCommission) {
+            const parsed = JSON.parse(savedCommission);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setCommissionData(parsed);
+              setCommissionLoaded(true);
+              restoredCommission = true;
+              try {
+                commissionMeta = await saveImportedDataset("commission", parsed, {
+                  importedAt: new Date().toISOString(),
+                  itemCount: parsed.length,
+                  rows: parsed.length,
+                  dataVersion: DATA_VERSION,
+                  summary: { type: "commission", rows: parsed.length, categories: parsed.length },
+                });
+              } catch (error) {
+                console.warn("[数据中心] 旧佣金数据迁移到 IndexedDB 失败:", error);
+              }
+            }
+          }
+        }
+
+        if (!restoredShipping) {
+          const savedShipping = localStorage.getItem("ozon_shipping_data");
+          if (savedShipping) {
+            const parsed = JSON.parse(savedShipping);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const fixedShipping = normalizeShippingForRestore(parsed);
+              setShippingData(fixedShipping);
+              setShippingLoaded(true);
+              restoredShipping = true;
+              safeLocalStorageSet("ozon_shipping_data", JSON.stringify(fixedShipping));
+              try {
+                shippingMeta = await saveImportedDataset("shipping", fixedShipping, {
+                  importedAt: new Date().toISOString(),
+                  itemCount: fixedShipping.length,
+                  rows: fixedShipping.length,
+                  dataVersion: DATA_VERSION,
+                  summary: { type: "shipping", rows: fixedShipping.length, channels: fixedShipping.length },
+                });
+              } catch (error) {
+                console.warn("[数据中心] 旧物流数据迁移到 IndexedDB 失败:", error);
+              }
+            }
+          }
+        }
+
+        if (!cancelled) {
+          setImportedDataMeta((prev) => ({
+            ...prev,
+            commission: commissionMeta,
+            shipping: shippingMeta,
+          }));
+
+          const latestMeta = [commissionMeta, shippingMeta]
+            .filter(Boolean)
+            .sort((a, b) => new Date(b!.importedAt).getTime() - new Date(a!.importedAt).getTime())[0];
+          if (latestMeta?.summary) {
+            setLastImportSummary(latestMeta.summary);
+          }
+        }
+      } catch (e) {
+        console.error("[数据中心] 用户导入数据恢复失败:", e);
+        if (!cancelled) {
+          setImportedDataMeta((prev) => ({
+            ...prev,
+            lastPersistenceError: e instanceof Error ? e.message : "用户导入数据恢复失败",
+          }));
+        }
       }
-    } catch (e) {
-      console.error("[数据中心] localStorage 恢复失败:", e);
+    };
+
+    restore();
+    return () => {
+      cancelled = true;
+    };
+  }, [DATA_VERSION]);
+
+  const persistImportedData = useCallback(async (
+    type: "commission" | "shipping",
+    data: CategoryCommission[] | ShippingChannel[],
+    summary: ImportSummary,
+    fileName?: string
+  ) => {
+    const localKey = type === "commission" ? "ozon_commission_data" : "ozon_shipping_data";
+    const localResult = safeLocalStorageSet(localKey, JSON.stringify(data));
+    let meta: ImportedDatasetMeta | null = null;
+
+    try {
+      meta = await saveImportedDataset(type, data, {
+        importedAt: new Date().toISOString(),
+        fileName,
+        itemCount: data.length,
+        rows: summary.rows,
+        dataVersion: DATA_VERSION,
+        summary,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "IndexedDB 写入失败";
+      setImportedDataMeta((prev) => ({
+        ...prev,
+        lastPersistenceError: `${type === "commission" ? "佣金表" : "物流表"}导入成功，但未能持久保存：${detail}`,
+      }));
+      console.warn("[数据中心] 导入数据持久化失败:", error);
     }
-  }, []);
+
+    if (!localResult.success && !meta) {
+      setImportedDataMeta((prev) => ({
+        ...prev,
+        lastPersistenceError: `${type === "commission" ? "佣金表" : "物流表"}导入成功，但浏览器存储失败，刷新后可能丢失：${localResult.error || "未知错误"}`,
+      }));
+      return;
+    }
+
+    setImportedDataMeta((prev) => ({
+      ...prev,
+      [type]: meta || prev[type],
+      lastPersistenceError: meta ? null : prev.lastPersistenceError,
+    }));
+  }, [DATA_VERSION]);
 
   /**
    * 加载佣金数据（CSV 或 XLSX）
@@ -436,13 +557,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         Papa.parse(file, {
           header: false,   // 不自动使用第一行作为 header
           skipEmptyLines: true,
-          complete: (results) => {
+          complete: async (results) => {
             try {
               const rawRows = results.data as string[][];
               const parsed = parseRows(rawRows);
               setCommissionData(parsed);
               setCommissionLoaded(true);
-              safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
               const summary: ImportSummary = {
                 type: "commission",
                 rows: rawRows.length,
@@ -453,6 +573,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
                   FBP: countCommissionTiers(parsed, "FBP"),
                 },
               };
+              await persistImportedData("commission", parsed, summary, file.name);
               setLastImportSummary(summary);
               resolve(summary);
             } catch (e) {
@@ -463,7 +584,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         });
       } else if (ext === "xlsx" || ext === "xls") {
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
           try {
             const data = new Uint8Array(e.target?.result as ArrayBuffer);
             const workbook = XLSX.read(data, { type: "array" });
@@ -476,7 +597,6 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             const parsed = parseRows(rawRows, firstSheetName);
             setCommissionData(parsed);
             setCommissionLoaded(true);
-            safeLocalStorageSet("ozon_commission_data", JSON.stringify(parsed));
             const summary: ImportSummary = {
               type: "commission",
               rows: rawRows.length,
@@ -488,6 +608,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
                 FBP: countCommissionTiers(parsed, "FBP"),
               },
             };
+            await persistImportedData("commission", parsed, summary, file.name);
             setLastImportSummary(summary);
             resolve(summary);
           } catch (err) {
@@ -500,7 +621,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         reject(new Error("不支持的文件格式，请上传 .csv 或 .xlsx 文件"));
       }
     });
-  }, []);
+  }, [persistImportedData]);
 
   /**
    * 加载物流数据（XLSX 或 CSV）
@@ -654,7 +775,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
 
       if (ext === "xlsx" || ext === "xls") {
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
           try {
             const data = new Uint8Array(e.target?.result as ArrayBuffer);
             const workbook = XLSX.read(data, { type: "array" });
@@ -684,8 +805,8 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
 
             setShippingData(finalData);
             setShippingLoaded(true);
-            safeLocalStorageSet("ozon_shipping_data", JSON.stringify(finalData));
             const summary = makeShippingSummary(rawRows, finalData);
+            await persistImportedData("shipping", finalData, summary, file.name);
             setLastImportSummary(summary);
             resolve(summary);
           } catch (err) {
@@ -698,7 +819,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         Papa.parse(file, {
           header: false,
           skipEmptyLines: true,
-          complete: (results) => {
+          complete: async (results) => {
             try {
               const rawRows = results.data as string[][];
               const parsed = parseShippingRows(rawRows);
@@ -718,8 +839,8 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
 
               setShippingData(finalData);
               setShippingLoaded(true);
-              safeLocalStorageSet("ozon_shipping_data", JSON.stringify(finalData));
               const summary = makeShippingSummary(rawRows, finalData);
+              await persistImportedData("shipping", finalData, summary, file.name);
               setLastImportSummary(summary);
               resolve(summary);
             } catch (e) {
@@ -732,7 +853,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         reject(new Error("不支持的文件格式，请上传 .csv 或 .xlsx 文件"));
       }
     });
-  }, [shippingData]);
+  }, [persistImportedData, shippingData]);
 
   /**
    * 清除佣金数据
@@ -740,8 +861,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
   const clearCommissionData = useCallback(() => {
     setCommissionData([]);
     setCommissionLoaded(false);
+    setImportedDataMeta((prev) => ({ ...prev, commission: null }));
     localStorage.removeItem("ozon_commission_data");
     localStorage.removeItem("ozon_commission_mappings"); // 🔹 清除映射历史
+    clearImportedDataset("commission").catch((error) => {
+      console.warn("[数据中心] 清除 IndexedDB 佣金数据失败:", error);
+    });
   }, []);
 
   /**
@@ -750,8 +875,12 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
   const clearShippingData = useCallback(() => {
     setShippingData([]);
     setShippingLoaded(false);
+    setImportedDataMeta((prev) => ({ ...prev, shipping: null }));
     localStorage.removeItem("ozon_shipping_data");
     localStorage.removeItem("ozon_shipping_mappings"); // 🔹 清除映射历史
+    clearImportedDataset("shipping").catch((error) => {
+      console.warn("[数据中心] 清除 IndexedDB 物流数据失败:", error);
+    });
   }, []);
 
   /**
@@ -1047,6 +1176,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
         shippingLoaded,
         columnMapping,
         lastImportSummary,
+        importedDataMeta,
         loadCommissionData,
         loadShippingData,
         clearCommissionData,

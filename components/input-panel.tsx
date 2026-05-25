@@ -879,7 +879,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               {adRiskControl.isOverBudget && (
                 <div className="text-xs text-red-600 bg-red-50 border border-red-200 px-2 py-2 rounded animate-pulse flex items-start gap-1.5">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  <span className="font-medium">⚠️ 广告费已超毛利，当前每单亏损！</span>
+                  <span className="font-medium">当前 ACOS 已超过保本 ACOS，需降广告或提售价。</span>
                 </div>
               )}
               

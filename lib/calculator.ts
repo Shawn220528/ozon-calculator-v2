@@ -642,12 +642,13 @@ export function detectCommissionBlackHole(
 }
 
 /**
- * 汇率抗压测试 (RMB主导模式 - 修正版)
+ * 汇率抗压测试 (RMB主导模式)
  * 
  * 核心逻辑：
  * - 前台卢布售价 (P_rub) 固定不变
- * - 汇率下跌时，RMB 售价 = P_rub × 新汇率
- * - 跌后利润 = (前台卢布售价 × 新汇率 × 边际贡献率) - 固定成本合计
+ * - exchangeRate 表示 1 CNY = N RUB
+ * - 卢布贬值/回款汇率恶化时，exchangeRate 上升，RMB 回款 = P_rub / 新汇率
+ * - 压力利润 = 新 RMB 回款 × 边际贡献率 - 固定成本合计
  */
 export function calculateExchangeRateStressTest(
   priceRMB: number,
@@ -680,7 +681,7 @@ export function calculateExchangeRateStressTest(
   const currentCommissionRate = getCommissionRate(commission, priceRUB, fulfillmentMode);
   const currentM = calculateMarginalContribution(currentCommissionRate, wFee, cRate, pFee);
 
-  // 计算汇率下跌后的利润
+  // 计算回款汇率恶化后的利润
   const calcProfitAtExchangeRate = (newExchangeRate: number) => {
     if (newExchangeRate <= 0) return -Infinity;
     
@@ -694,15 +695,15 @@ export function calculateExchangeRateStressTest(
     const M = calculateMarginalContribution(newCommissionRate, wFee, cRate, pFee);
     
     if (M <= 0) return -Infinity;
-    // 🔹 修正公式：跌后利润 = (P_rub × 新汇率 × 边际贡献率) - 固定成本
+    // 🔹 口径：exchangeRate 越高，固定卢布售价折回人民币越少
     return calculateNetProfit(newPriceRMB, M, fCost + newPriceRMB * cpcRate);
   };
 
-  // 汇率下跌 5%
-  const at5PercentDrop = calcProfitAtExchangeRate(exRate * 0.95);
+  // 回款汇率恶化 5%（1 CNY = N RUB 中的 N 上升 5%）
+  const at5PercentDrop = calcProfitAtExchangeRate(exRate * 1.05);
   
-  // 汇率下跌 10%
-  const at10PercentDrop = calcProfitAtExchangeRate(exRate * 0.90);
+  // 回款汇率恶化 10%
+  const at10PercentDrop = calcProfitAtExchangeRate(exRate * 1.10);
 
   // 🔹 0 利润极值汇率：公式 = F_fixed / (P_rub × M)
   let zeroProfitRate = 0;
@@ -725,8 +726,13 @@ export function calculateExchangeRateStressTest(
       if (testCommissionRate !== currentCommissionRate) {
         // 如果跨阶梯，需要迭代求解
         // 简化处理：使用二分法逼近
-        let low = 0.01;
+        let low = exRate;
         let high = exRate * 2;
+        let highProfit = calcProfitAtExchangeRate(high);
+        while (isFinite(highProfit) && highProfit > 0 && high < exRate * 8) {
+          high *= 1.5;
+          highProfit = calcProfitAtExchangeRate(high);
+        }
         
         for (let i = 0; i < 20; i++) {
           const mid = (low + high) / 2;
@@ -742,9 +748,9 @@ export function calculateExchangeRateStressTest(
           }
           
           if (profit > 0) {
-            high = mid;
-          } else {
             low = mid;
+          } else {
+            high = mid;
           }
         }
       }
@@ -1394,9 +1400,8 @@ export function performFullCalculation(
   // 计算当前 ACOS
   const currentACOS = priceRMB > 0 ? (totalAdCost / priceRMB) * 100 : 0;
   
-  // 检测是否超预算（广告费超过毛利）
-  const grossProfitBeforeAds = priceRMB * M - totalFixedCostWithoutAds;
-  const isOverBudget = totalAdCost > grossProfitBeforeAds && totalAdCost > 0;
+  // 检测是否超预算：统一按当前 ACOS 是否超过保本 ACOS 判断，避免 CPA 率在 M 中扣除后再次被 totalAdCost 双扣。
+  const isOverBudget = currentACOS > breakEvenACOS + 0.0001 && totalAdCost > 0;
   
   // CVR 灵敏度分析（仅当 CPC 启用时）
   const cvrSensitivity = input.cpcEnabled && (input.cpcBillingMode || "bidCvr") === "bidCvr" && input.cpcConversionRate > 0

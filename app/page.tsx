@@ -369,7 +369,7 @@ function importConfig(onSuccess: () => void, onError: (err: string) => void) {
 }
 
 export default function Home() {
-  const { getCommissionByCategory, getShippingChannels, commissionData, shippingData, commissionLoaded, shippingLoaded, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig, lastImportSummary } = useDataHub();
+  const { getCommissionByCategory, getShippingChannels, commissionData, shippingData, commissionLoaded, shippingLoaded, loadCommissionData, loadShippingData, updateColumnMapping, updateInterceptionConfig, lastImportSummary, importedDataMeta } = useDataHub();
   const [input, setInput] = useState<CalculationInput>(DEFAULT_INPUT);
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [marginError, setMarginError] = useState<string | null>(null);
@@ -515,7 +515,7 @@ export default function Home() {
         });
       }
       
-      // 旧版本会持久锁定物流渠道；新版只保留当前会话临时选择。
+      // 物流渠道只保留当前会话选择，避免刷新后锁定过期渠道。
       localStorage.removeItem("ozon-locked-channel");
 
       // 🔹 恢复利润率锁定状态
@@ -1126,8 +1126,8 @@ export default function Home() {
         ["物流", "计费重", result.chargeableWeight.toFixed(0), "g"],
         ["风险", "警告", result.warnings.join(" | "), ""],
         ["建议", "首要建议", firstSuggestion, ""],
-        ["汇率", "5%下跌利润", stressTest.at5PercentDrop.toFixed(2), ""],
-        ["汇率", "10%下跌利润", stressTest.at10PercentDrop.toFixed(2), ""],
+        ["汇率", "5%回款恶化利润", stressTest.at5PercentDrop.toFixed(2), "1 CNY = N RUB"],
+        ["汇率", "10%回款恶化利润", stressTest.at10PercentDrop.toFixed(2), "1 CNY = N RUB"],
         ...(activeTax ? [
           ["税务", "增值税估算", activeTax.vatPayable.toFixed(2), ""],
           ["税务", "企业所得税", activeTax.corporateTax.toFixed(2), ""],
@@ -1220,16 +1220,24 @@ export default function Home() {
       ? Math.round((shippingData.filter((ch) => ch.minValue !== undefined || ch.maxValue !== undefined || ch.minValueRUB !== undefined || ch.maxValueRUB !== undefined).length / shippingData.length) * 100)
       : 0;
     const missingLogisticsFields = shippingData.filter((ch) => !ch.volumetricDivisor || !ch.deliveryTime || !ch.maxWeight).length;
-    const usingDefaultData = commissionLoaded && shippingLoaded && !lastImportSummary && commissionData.length > 0 && shippingData.length > 0;
+    const hasImportedData = Boolean(importedDataMeta.commission || importedDataMeta.shipping || lastImportSummary);
+    const usingDefaultData = commissionLoaded && shippingLoaded && !hasImportedData && commissionData.length > 0 && shippingData.length > 0;
+    const latestImportAt = [importedDataMeta.commission?.importedAt, importedDataMeta.shipping?.importedAt]
+      .filter(Boolean)
+      .sort((a, b) => new Date(b as string).getTime() - new Date(a as string).getTime())[0] as string | undefined;
     return {
       commissionCategories: commissionData.length,
       shippingChannels: shippingData.length,
       valueCoverage,
       missingLogisticsFields,
       usingDefaultData,
-      label: usingDefaultData ? "默认样例数据" : "用户/缓存数据",
+      commissionImportedAt: importedDataMeta.commission?.importedAt,
+      shippingImportedAt: importedDataMeta.shipping?.importedAt,
+      latestImportAt,
+      storageError: importedDataMeta.lastPersistenceError,
+      label: usingDefaultData ? "默认样例数据" : "用户最后导入数据",
     };
-  }, [commissionData.length, commissionLoaded, lastImportSummary, shippingData, shippingLoaded]);
+  }, [commissionData.length, commissionLoaded, importedDataMeta, lastImportSummary, shippingData, shippingLoaded]);
 
   const operationalStatus = shippingData.length === 0 || commissionData.length === 0
     ? { label: "数据缺失", className: "bg-slate-100 text-slate-700 border-slate-300" }
@@ -1401,6 +1409,15 @@ export default function Home() {
       plainText: dataStatusText,
     });
 
+    if (dataStatus.storageError) {
+      alerts.push({
+        id: `storage-error-${dataStatus.storageError}`,
+        severity: "danger",
+        label: `导入数据存储异常：${dataStatus.storageError}`,
+        plainText: `导入数据存储异常：${dataStatus.storageError}`,
+      });
+    }
+
     if (shippingChannels.available.length === 0 && shippingData.length > 0) {
       alerts.push({
         id: `fatal-no-shipping-${shippingChannels.unavailable.length}`,
@@ -1561,6 +1578,7 @@ export default function Home() {
     dataStatus.commissionCategories,
     dataStatus.label,
     dataStatus.shippingChannels,
+    dataStatus.storageError,
     dataStatus.usingDefaultData,
     dataStatus.valueCoverage,
     dimensionOrWeightExceeded,
@@ -1747,6 +1765,10 @@ export default function Home() {
                   <div className="flex justify-between gap-3"><span>物流渠道</span><b>{dataStatus.shippingChannels}</b></div>
                   <div className="flex justify-between gap-3"><span>货值覆盖</span><b>{dataStatus.valueCoverage}%</b></div>
                   <div className="flex justify-between gap-3"><span>字段缺失</span><b>{dataStatus.missingLogisticsFields}</b></div>
+                  <div className="flex justify-between gap-3"><span>佣金导入</span><b>{dataStatus.commissionImportedAt ? new Date(dataStatus.commissionImportedAt).toLocaleString("zh-CN", { hour12: false }) : "无"}</b></div>
+                  <div className="flex justify-between gap-3"><span>物流导入</span><b>{dataStatus.shippingImportedAt ? new Date(dataStatus.shippingImportedAt).toLocaleString("zh-CN", { hour12: false }) : "无"}</b></div>
+                  <div className="flex justify-between gap-3"><span>存储状态</span><b className={dataStatus.storageError ? "text-red-600" : dataStatus.usingDefaultData ? "text-amber-600" : "text-emerald-600"}>{dataStatus.storageError ? "异常" : dataStatus.usingDefaultData ? "样例数据" : "已保存"}</b></div>
+                  {dataStatus.storageError && <div className="rounded border border-red-100 bg-red-50 px-2 py-1 text-red-700">{dataStatus.storageError}</div>}
                 </div>
                 <div className="px-3 py-2 border-t border-b text-xs font-medium text-slate-600">模板</div>
                 <button onClick={downloadCommissionTemplate} className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50">佣金表模板</button>
@@ -2023,6 +2045,7 @@ export default function Home() {
               sixTierPricing={sixTierPricing}
               commission={commission}
               onCopyOzonPrice={handleCopyOzonPrice}
+              onApplyPrice={(priceRMB) => handleInputChange({ ...input, targetPriceRMB: priceRMB })}
             />
           </div>
 
