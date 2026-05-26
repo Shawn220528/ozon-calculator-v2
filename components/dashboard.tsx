@@ -37,7 +37,7 @@ import { Slider } from "@/components/ui/slider";
 import { CategoryCommission, CalculationResult, CalculationInput, ShippingChannel } from "@/lib/types";
 import { calculateShippingCost } from "@/lib/data-hub-context";
 import { getCommissionRate, getCommissionTiersForMode, calculateMarginalContribution, calculateNetProfit, detectShippingDimensionLimits } from "@/lib/calculator";
-import { cnyToRub, rubToCny } from "@/lib/currency";
+import { cnyToRub, getRiskAdjustedRevenueRMB, getRiskAdjustedRubPerCny, rubToCny } from "@/lib/currency";
 import { calculateOzonBackendPricing } from "@/lib/ozon-pricing";
 import { isProfitMarginBelowThreshold } from "@/lib/profit-threshold";
 import {
@@ -130,7 +130,15 @@ export function Dashboard({
   onCopyOzonPrice,
   onApplyPrice,
 }: DashboardProps) {
-  const E = input.exchangeRate; // CNY/RUB (1 CNY = X RUB)
+  const E = input.exchangeRate; // 名义汇率：1 CNY = X RUB
+  const effectiveRubPerCny = useMemo(
+    () => getRiskAdjustedRubPerCny(input.exchangeRate, input.exchangeRateBuffer),
+    [input.exchangeRate, input.exchangeRateBuffer]
+  );
+  const effectiveTargetPriceRMB = useMemo(
+    () => getRiskAdjustedRevenueRMB(input.targetPriceRMB, input.exchangeRateBuffer),
+    [input.exchangeRateBuffer, input.targetPriceRMB]
+  );
   const [advisorExpanded, setAdvisorExpanded] = useState(true);
   const [chartsExpanded, setChartsExpanded] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -179,7 +187,7 @@ export function Dashboard({
   const [customDropPercent, setCustomDropPercent] = useState(0);
   
   const exchangeScenarioBase = useMemo(() => {
-    const frontPriceRUB = cnyToRub(input.targetPriceRMB, input.exchangeRate);
+    const frontPriceRUB = cnyToRub(effectiveTargetPriceRMB, effectiveRubPerCny);
     const cpaRateForM = input.cpaEnabled ? input.cpaRate : 0;
     const cpcSalesPercent =
       input.cpcEnabled && (input.cpcBillingMode || "bidCvr") === "salesPercent"
@@ -194,10 +202,10 @@ export function Dashboard({
       (cpcSalesPercent > 0 ? result.costs.cpcCost : 0);
 
     return { frontPriceRUB, cpaRateForM, cpcSalesPercent, fixedCost };
-  }, [input, result.costs]);
+  }, [effectiveRubPerCny, effectiveTargetPriceRMB, input, result.costs]);
 
   const calculateExchangeScenario = useCallback((worsenPercent: number) => {
-    const safeRate = input.exchangeRate > 0 ? input.exchangeRate : 0;
+    const safeRate = effectiveRubPerCny > 0 ? effectiveRubPerCny : 0;
     const nextExchangeRate = safeRate * (1 + worsenPercent / 100);
     const priceRMB = nextExchangeRate > 0 ? rubToCny(exchangeScenarioBase.frontPriceRUB, nextExchangeRate) : 0;
 
@@ -231,8 +239,8 @@ export function Dashboard({
     return { worsenPercent, exchangeRate: nextExchangeRate, priceRMB, profit, commissionRate };
   }, [
     commission,
+    effectiveRubPerCny,
     exchangeScenarioBase,
-    input.exchangeRate,
     input.fulfillmentMode,
     input.paymentFee,
     input.withdrawalFee,
@@ -521,12 +529,12 @@ export function Dashboard({
   const recommendedTier = sixTierPricing[recommendedTierIndex];
   const selectedShippingName = selectedChannel?.thirdParty || selectedChannel?.name || shippingChannels.available[0]?.thirdParty || shippingChannels.available[0]?.name || "暂无可用物流";
   const targetMarginFloor = Math.max(0, profitWarningThreshold ?? 0);
-  const targetProfitFloor = input.targetPriceRMB > 0 ? input.targetPriceRMB * (targetMarginFloor / 100) : 0;
+  const targetProfitFloor = effectiveTargetPriceRMB > 0 ? effectiveTargetPriceRMB * (targetMarginFloor / 100) : 0;
   const currentAdCost = result.costs.cpaCost + result.costs.cpcCost;
   const profitBeforeAds = result.netProfit + currentAdCost;
   const breakEvenAdCost = Math.max(0, profitBeforeAds);
-  const breakEvenAcosLimit = input.targetPriceRMB > 0
-    ? (result.adRiskControl?.breakEvenACOS ?? (breakEvenAdCost / input.targetPriceRMB) * 100)
+  const breakEvenAcosLimit = effectiveTargetPriceRMB > 0
+    ? (result.adRiskControl?.breakEvenACOS ?? (breakEvenAdCost / effectiveTargetPriceRMB) * 100)
     : 0;
   const targetProfitAdRoom = result.netProfit - targetProfitFloor;
   const testAcosLimit = Math.max(0, breakEvenAcosLimit * 0.7);
@@ -542,13 +550,13 @@ export function Dashboard({
       { label: "退损预估", value: result.costs.returnCost, color: "#F97316" },
       { label: "广告费用", value: result.costs.cpaCost + result.costs.cpcCost, color: "#3B82F6" },
     ].filter((item) => item.value > 0);
-    const denominator = input.targetPriceRMB || 1;
+    const denominator = effectiveTargetPriceRMB || 1;
     const items = baseItems.map((item) => ({ ...item, percent: (item.value / denominator) * 100 }));
     if (result.netProfit >= 0) {
       items.push({ label: "净利润", value: result.netProfit, color: "#EF4444", percent: (result.netProfit / denominator) * 100 });
     }
     return items;
-  }, [result.costs, input.targetPriceRMB, result.netProfit]);
+  }, [effectiveTargetPriceRMB, result.costs, result.netProfit]);
 
   const sensitivityData = useMemo(() => {
     return [-15, -10, -5, 0, 5, 10, 15].map((percent) => {
@@ -571,14 +579,14 @@ export function Dashboard({
   }, [calculateExchangeScenario, customDropPercent]);
 
   const breakEvenExchangeRate = useMemo(() => {
-    if (!commission || result.netProfit <= 0 || input.exchangeRate <= 0) return null;
-    let low = input.exchangeRate;
-    let high = input.exchangeRate * 2;
+    if (!commission || result.netProfit <= 0 || effectiveRubPerCny <= 0) return null;
+    let low = effectiveRubPerCny;
+    let high = effectiveRubPerCny * 2;
     let highProfit = calculateExchangeScenario(100).profit;
 
-    while (highProfit > 0 && high < input.exchangeRate * 8) {
+    while (highProfit > 0 && high < effectiveRubPerCny * 8) {
       high *= 1.5;
-      const worsenPercent = ((high / input.exchangeRate) - 1) * 100;
+      const worsenPercent = ((high / effectiveRubPerCny) - 1) * 100;
       highProfit = calculateExchangeScenario(worsenPercent).profit;
     }
 
@@ -586,7 +594,7 @@ export function Dashboard({
 
     for (let index = 0; index < 36; index += 1) {
       const mid = (low + high) / 2;
-      const worsenPercent = ((mid / input.exchangeRate) - 1) * 100;
+      const worsenPercent = ((mid / effectiveRubPerCny) - 1) * 100;
       const profit = calculateExchangeScenario(worsenPercent).profit;
       if (profit > 0) {
         low = mid;
@@ -596,20 +604,20 @@ export function Dashboard({
     }
 
     return high;
-  }, [calculateExchangeScenario, commission, input.exchangeRate, result.netProfit]);
+  }, [calculateExchangeScenario, commission, effectiveRubPerCny, result.netProfit]);
 
   const adImpactRows = useMemo(() => {
     return [5, 10, 15].map((acos) => {
-      const adCost = input.targetPriceRMB * (acos / 100);
+      const adCost = effectiveTargetPriceRMB * (acos / 100);
       const profit = profitBeforeAds - adCost;
       return {
         acos,
         adCost,
         profit,
-        margin: input.targetPriceRMB > 0 ? (profit / input.targetPriceRMB) * 100 : 0,
+        margin: effectiveTargetPriceRMB > 0 ? (profit / effectiveTargetPriceRMB) * 100 : 0,
       };
     });
-  }, [input.targetPriceRMB, profitBeforeAds]);
+  }, [effectiveTargetPriceRMB, profitBeforeAds]);
 
   return (
     <div className="space-y-3 pr-1">

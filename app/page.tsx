@@ -34,11 +34,17 @@ import {
   calculateSixTierPricing,
   calculateSuggestedPrice,
   calculateCpcCost,
+  detectShippingDimensionLimits,
 } from "@/lib/calculator";
 import { calculateShippingCost, parseBillingWeight, getBillingModeDescription } from "@/lib/data-hub-context";
 import { PreviewMappingDialog } from "@/components/preview-mapping-dialog";
 import { FieldMapping, ParsedData, smartParseCSV } from "@/lib/smart-parser";
-import { cnyToRub } from "@/lib/currency";
+import {
+  cnyToRub,
+  getRiskAdjustedRevenueRMB,
+  getRiskAdjustedRubPerCny,
+  normalizeExchangeRateBuffer,
+} from "@/lib/currency";
 import { parseBatchInput as parseBatchCsvInput } from "@/lib/batch-parsing";
 import {
   downloadBatchTemplate,
@@ -149,6 +155,7 @@ interface BatchResultItem {
   rowIndex: number;
   sku?: string;
   input: CalculationInput;
+  displayTargetPriceRMB?: number;
   selectedChannel: ShippingChannel | null;
   result: CalculationResult | null;
   status: "success" | "failed";
@@ -587,16 +594,27 @@ export default function Home() {
     [input.primaryCategory, input.secondaryCategory, input.tertiaryCategory, getCommissionByCategory]
   );
 
-  // 🔹 计算实际汇率（扣除安全缓冲），单位固定为 1 CNY = X RUB
+  // 🔹 计算风险调整口径：前台 RUB 价格不变，回款汇率按安全缓冲恶化。
   const effectiveRubPerCny = useMemo(() => {
-    // 用户输入表示: 1 CNY = X RUB
-    // buffer > 0 时，实际汇率 = 原汇率 × (1 - buffer/100)
-    const bufferMultiplier = 1 - (input.exchangeRateBuffer || 0) / 100;
-    const adjustedRate = input.exchangeRate * Math.max(bufferMultiplier, 0.5); // 最低保护50%
-    return adjustedRate > 0 ? adjustedRate : 12;
+    return getRiskAdjustedRubPerCny(input.exchangeRate, input.exchangeRateBuffer);
   }, [input.exchangeRate, input.exchangeRateBuffer]);
 
-  // 获取可用物流渠道 — 需要将 RMB 转为 RUB 传入（使用实际汇率）
+  const exchangeRiskMultiplier = useMemo(
+    () => 1 + normalizeExchangeRateBuffer(input.exchangeRateBuffer) / 100,
+    [input.exchangeRateBuffer]
+  );
+
+  const effectiveTargetPriceRMB = useMemo(
+    () => getRiskAdjustedRevenueRMB(input.targetPriceRMB, input.exchangeRateBuffer),
+    [input.targetPriceRMB, input.exchangeRateBuffer]
+  );
+
+  const toDisplayPriceRMB = useCallback(
+    (riskAdjustedPriceRMB: number) => Math.ceil(riskAdjustedPriceRMB * exchangeRiskMultiplier * 100) / 100,
+    [exchangeRiskMultiplier]
+  );
+
+  // 获取可用物流渠道 — 前台 RUB 价格保持不变，RMB 回款按风险调整
   const selectedProviders = input.designatedProviders || [];
   const isFavoritesFilter = selectedProviders.includes("__favorites__");
   const providers = selectedProviders.filter(p => p && p !== "__favorites__");
@@ -609,14 +627,14 @@ export default function Home() {
       input.width,
       input.height,
       input.weight,
-      input.targetPriceRMB,
+      effectiveTargetPriceRMB,
       effectiveRubPerCny,
       input.valueLimitCurrency,
       input.hasBattery, // 🔹 传入是否带电
       input.hasLiquid, // 🔹 传入是否带液体
       providerStr // 🔹 使用物流商筛选
     );
-  }, [input.length, input.width, input.height, input.weight, input.targetPriceRMB, effectiveRubPerCny, input.valueLimitCurrency, input.hasBattery, input.hasLiquid, providers, getShippingChannels]);
+  }, [input.length, input.width, input.height, input.weight, effectiveTargetPriceRMB, effectiveRubPerCny, input.valueLimitCurrency, input.hasBattery, input.hasLiquid, providers, getShippingChannels]);
   
   // 🔹 应用收藏夹筛选
   const shippingChannels = useMemo(() => {
@@ -638,15 +656,22 @@ export default function Home() {
       return null;
     }
     // 使用 input.exchangeRate (1 CNY = X RUB) 作为 RMB→RUB 转换因子
-    return calculateSuggestedPrice(
+    const suggestion = calculateSuggestedPrice(
       shippingChannels.unavailable,
       effectiveRubPerCny,
       input.valueLimitCurrency,
-      { ...input, exchangeRate: effectiveRubPerCny },
+      { ...input, targetPriceRMB: effectiveTargetPriceRMB, exchangeRate: effectiveRubPerCny },
       commission,
       20
     );
-  }, [shippingChannels, input, commission, effectiveRubPerCny]);
+    if (!suggestion.suggestedPriceRMB) return suggestion;
+    const displayPriceRMB = toDisplayPriceRMB(suggestion.suggestedPriceRMB);
+    return {
+      ...suggestion,
+      suggestedPriceRMB: displayPriceRMB,
+      suggestedPriceRUB: cnyToRub(displayPriceRMB, input.exchangeRate),
+    };
+  }, [shippingChannels, input, commission, effectiveTargetPriceRMB, effectiveRubPerCny, toDisplayPriceRMB]);
 
   // 🔹 推荐物流排序：按费用/时效/评分排序（定义在 channelCosts 之后，见下方）
 
@@ -691,9 +716,10 @@ export default function Home() {
   const effectiveInput = useMemo(() => {
     return {
       ...input,
+      targetPriceRMB: effectiveTargetPriceRMB,
       exchangeRate: effectiveRubPerCny,
     };
-  }, [input, effectiveRubPerCny]);
+  }, [input, effectiveTargetPriceRMB, effectiveRubPerCny]);
 
   // 执行完整计算（使用实际汇率）
   const result = useMemo(
@@ -715,7 +741,7 @@ export default function Home() {
         setMarginError(reverseResult.error);
       } else if (reverseResult.priceRMB > 0) {
         setMarginError(null);
-        setInput((prev) => ({ ...prev, targetPriceRMB: reverseResult.priceRMB }));
+        setInput((prev) => ({ ...prev, targetPriceRMB: toDisplayPriceRMB(reverseResult.priceRMB) }));
       }
     }
     lockedMarginRef.current = lockedMargin;
@@ -741,6 +767,7 @@ export default function Home() {
     lockedMargin,
     commission,
     selectedChannel,
+    toDisplayPriceRMB,
   ]);
   
   // 🔹 监控佣金阶梯变化
@@ -758,6 +785,18 @@ export default function Home() {
     if (!commission) return [];
     return calculateSixTierPricing(effectiveInput, commission, selectedChannel || undefined);
   }, [effectiveInput, commission, selectedChannel]);
+
+  const displaySixTierPricing = useMemo(() => {
+    return sixTierPricing.map((tier) => {
+      if (tier.disabled || !tier.priceRMB) return tier;
+      const displayPriceRMB = toDisplayPriceRMB(tier.priceRMB);
+      return {
+        ...tier,
+        priceRMB: displayPriceRMB,
+        priceRUB: cnyToRub(displayPriceRMB, input.exchangeRate),
+      };
+    });
+  }, [input.exchangeRate, sixTierPricing, toDisplayPriceRMB]);
 
   // 🔹 优化：共享的总固定成本计算 - 避免重复计算
   const totalFixedCostData = useMemo(() => {
@@ -808,8 +847,16 @@ export default function Home() {
       priceRangeRMB.push(parseFloat(p.toFixed(2)));
     }
     const { fixedCostForVariablePricing, cpaRateForM, variableCpcSalesPercent } = totalFixedCostData;
-    return calculateProfitCurve(priceRangeRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent, effectiveInput.fulfillmentMode || "RFBS");
-  }, [commission, effectiveInput, totalFixedCostData]);
+    return calculateProfitCurve(priceRangeRMB, effectiveInput.exchangeRate, commission, effectiveInput.withdrawalFee, cpaRateForM, fixedCostForVariablePricing, effectiveInput.paymentFee, variableCpcSalesPercent, effectiveInput.fulfillmentMode || "RFBS")
+      .map((point) => {
+        const displayPriceRMB = toDisplayPriceRMB(point.priceRMB);
+        return {
+          ...point,
+          priceRMB: displayPriceRMB,
+          priceRUB: cnyToRub(displayPriceRMB, input.exchangeRate),
+        };
+      });
+  }, [commission, effectiveInput, input.exchangeRate, toDisplayPriceRMB, totalFixedCostData]);
 
   // 汇率抗压测试
   const stressTest = useMemo(() => {
@@ -838,9 +885,9 @@ export default function Home() {
       setMarginError(result.error);
     } else {
       setMarginError(null);
-      setInput((prev) => ({ ...prev, targetPriceRMB: result.priceRMB }));
+      setInput((prev) => ({ ...prev, targetPriceRMB: toDisplayPriceRMB(result.priceRMB) }));
     }
-  }, [effectiveInput, commission, selectedChannel]);
+  }, [effectiveInput, commission, selectedChannel, toDisplayPriceRMB]);
 
   // 清除售价时清除利润率错误
   const handleInputChange = useCallback((newInput: CalculationInput) => {
@@ -1030,6 +1077,7 @@ export default function Home() {
         const rowInput: CalculationInput = {
           ...input,
           ...row,
+          targetPriceRMB: getRiskAdjustedRevenueRMB(row.targetPriceRMB ?? input.targetPriceRMB, input.exchangeRateBuffer),
           exchangeRate: effectiveRubPerCny,
           valueLimitCurrency: row.valueLimitCurrency || input.valueLimitCurrency,
           designatedProviders: input.designatedProviders || [],
@@ -1040,6 +1088,7 @@ export default function Home() {
             rowIndex: index + 2,
             sku: row.sku,
             input: rowInput,
+            displayTargetPriceRMB: row.targetPriceRMB ?? input.targetPriceRMB,
             selectedChannel: null,
             result: null,
             status: "failed",
@@ -1069,10 +1118,14 @@ export default function Home() {
         const selected = rowChannels.available[0] || null;
         if (!selected) {
           const suggestedPrice = calculateSuggestedPrice(rowChannels.unavailable, effectiveRubPerCny, rowInput.valueLimitCurrency, rowInput, rowCommission, 20);
+          const displaySuggestedPriceRMB = suggestedPrice.suggestedPriceRMB
+            ? toDisplayPriceRMB(suggestedPrice.suggestedPriceRMB)
+            : 0;
           return {
             rowIndex: index + 2,
             sku: row.sku,
             input: rowInput,
+            displayTargetPriceRMB: row.targetPriceRMB ?? input.targetPriceRMB,
             selectedChannel: null,
             result: null,
             status: "failed",
@@ -1081,7 +1134,7 @@ export default function Home() {
             unavailableChannelCount: rowChannels.unavailable.length,
             riskLevel: "高",
             hasVolumetric: false,
-            suggestedPriceRMB: suggestedPrice.suggestedPriceRMB || undefined,
+            suggestedPriceRMB: displaySuggestedPriceRMB || undefined,
           };
         }
 
@@ -1091,6 +1144,7 @@ export default function Home() {
           rowIndex: index + 2,
           sku: row.sku,
           input: rowInput,
+          displayTargetPriceRMB: row.targetPriceRMB ?? input.targetPriceRMB,
           selectedChannel: selected,
           result: calculation,
           status: "success",
@@ -1119,7 +1173,7 @@ export default function Home() {
       setIsBatchCalculating(false);
       e.target.value = "";
     }
-  }, [effectiveRubPerCny, getCommissionByCategory, getShippingChannels, input]);
+  }, [effectiveRubPerCny, getCommissionByCategory, getShippingChannels, input, toDisplayPriceRMB]);
 
   const handleClearBatchResults = useCallback(() => {
     setBatchResults([]);
@@ -1137,7 +1191,7 @@ export default function Home() {
         item.status === "success" ? "成功" : "失败",
         item.input.primaryCategory,
         item.input.secondaryCategory,
-        item.input.targetPriceRMB,
+        item.displayTargetPriceRMB ?? item.input.targetPriceRMB,
         item.netProfit?.toFixed(2),
         item.roi?.toFixed(1),
         item.profitMargin?.toFixed(1),
@@ -1166,6 +1220,11 @@ export default function Home() {
         ["输入", "重量", input.weight, "g"],
         ["定价", "售价RMB", input.targetPriceRMB, ""],
         ["定价", "售价RUB", cnyToRub(input.targetPriceRMB, input.exchangeRate).toFixed(0), ""],
+        ...(input.exchangeRateBuffer > 0 ? [
+          ["汇率", "安全缓冲", `${input.exchangeRateBuffer}%`, "利润按风险回款口径计算"],
+          ["汇率", "风险回款RMB", effectiveTargetPriceRMB.toFixed(2), "前台RUB不变，回款汇率恶化后的收入"],
+          ["汇率", "风险回款汇率", `1 CNY = ${effectiveRubPerCny.toFixed(4)} RUB`, "用于净利/ROI/利润率计算"],
+        ] : []),
         ...(ozonPricing.isValid ? [
           ["定价", "Ozon后台定价RMB", String(ozonPricing.ozonBackendPriceRMB), "前台售价 ÷ 40%"],
           ["定价", "Ozon折扣前价格RMB", String(ozonPricing.ozonOriginalPriceRMB), "后台定价 ÷ 60%"],
@@ -1190,7 +1249,7 @@ export default function Home() {
         ] : []),
       ]
     );
-  }, [input, result, selectedChannel, stressTest]);
+  }, [effectiveRubPerCny, effectiveTargetPriceRMB, input, result, selectedChannel, stressTest]);
 
   const handleCopyOzonPrice = useCallback(async (label: string, value: string) => {
     try {
@@ -1349,9 +1408,10 @@ export default function Home() {
   }, [selectedChannel, channelBillingInfo]);
 
   const dimensionOrWeightExceeded = useMemo(() => {
-    const sumDim = input.length + input.width + input.height;
-    const maxSide = Math.max(input.length, input.width, input.height);
-    const dimEx = shippingChannels.available.find(ch => (ch.maxLength && maxSide > ch.maxLength) || (ch.maxSumDimension && sumDim > ch.maxSumDimension));
+    const dimEx = shippingChannels.available.find(ch =>
+      detectShippingDimensionLimits(input.length, input.width, input.height, ch)
+        .some((warning) => warning.warning.startsWith("🚫"))
+    );
     const weightEx = shippingChannels.available.find(ch => ch.maxWeight && input.weight > ch.maxWeight);
     return Boolean(dimEx || weightEx);
   }, [input.height, input.length, input.weight, input.width, shippingChannels.available]);
@@ -1370,7 +1430,7 @@ export default function Home() {
     const useRmbLimit = hasPreferredLimit ? preferredCurrency === "RMB" : fallbackCurrency === "RMB";
     const maxValue = hasPreferredLimit ? preferredMax : fallbackMax;
     const minValue = hasPreferredLimit ? preferredMin : fallbackMin;
-    const currentValue = useRmbLimit ? input.targetPriceRMB : cnyToRub(input.targetPriceRMB, input.exchangeRate);
+    const currentValue = useRmbLimit ? effectiveTargetPriceRMB : cnyToRub(effectiveTargetPriceRMB, effectiveRubPerCny);
     const unit = useRmbLimit ? "¥" : "₽";
     const isPriceTooHigh = maxValue !== undefined && currentValue > maxValue;
     const isPriceTooLow = minValue !== undefined && currentValue < minValue;
@@ -1388,7 +1448,7 @@ export default function Home() {
       unit,
       useRmbLimit,
     };
-  }, [input.exchangeRate, input.targetPriceRMB, input.valueLimitCurrency, shippingChannels.available.length, shippingChannels.unavailable]);
+  }, [effectiveRubPerCny, effectiveTargetPriceRMB, input.valueLimitCurrency, shippingChannels.available.length, shippingChannels.unavailable]);
 
   const rawTopAlerts = useMemo<TopAlertItem[]>(() => {
     const alerts: TopAlertItem[] = [];
@@ -2129,7 +2189,7 @@ export default function Home() {
               profitCurve={profitCurve}
               stressTest={stressTest}
               multiItemProfit={multiItemProfit}
-              sixTierPricing={sixTierPricing}
+              sixTierPricing={displaySixTierPricing}
               commission={commission}
               onCopyOzonPrice={handleCopyOzonPrice}
               onApplyPrice={(priceRMB) => setInput((prev) => ({ ...prev, targetPriceRMB: priceRMB }))}
@@ -2454,7 +2514,7 @@ export default function Home() {
                         }`}>
                           <td className="p-2 font-medium text-slate-700">#{item.rowIndex} {item.sku || ""}</td>
                           <td className="p-2 text-slate-600">{item.input.secondaryCategory}</td>
-                          <td className="p-2 text-right font-semibold text-indigo-700">¥{(item.input.targetPriceRMB || 0).toFixed(0)}</td>
+                          <td className="p-2 text-right font-semibold text-indigo-700">¥{((item.displayTargetPriceRMB ?? item.input.targetPriceRMB) || 0).toFixed(0)}</td>
                           <td className="p-2 text-right font-semibold text-slate-700">
                             {item.result ? `¥${item.result.costs.commission.toFixed(2)} (${item.result.commissionRate}%)` : "-"}
                           </td>

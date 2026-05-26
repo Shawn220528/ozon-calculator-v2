@@ -1369,13 +1369,17 @@ export function parseBillingWeight(
   divisor: number;
   billingType: string;
 } {
+  const safeLength = Number.isFinite(length) ? Math.max(0, length) : 0;
+  const safeWidth = Number.isFinite(width) ? Math.max(0, width) : 0;
+  const safeHeight = Number.isFinite(height) ? Math.max(0, height) : 0;
+  const safeActualWeight = Number.isFinite(actualWeight) ? Math.max(0, actualWeight) : 0;
   const billingTypeRaw = channel.billingType || "实际重量";
   const divisor = parseVolumetricDivisor(channel);
 
   if (divisor <= 0) {
     return {
-      billingWeight: actualWeight,
-      actualWeight,
+      billingWeight: safeActualWeight,
+      actualWeight: safeActualWeight,
       volumetricWeight: 0,
       isVolumetric: false,
       divisor: 0,
@@ -1384,10 +1388,10 @@ export function parseBillingWeight(
   }
   
   // 计算体积重 (g)
-  const volumetricWeight = ((length * width * height) / divisor) * 1000;
+  const volumetricWeight = ((safeLength * safeWidth * safeHeight) / divisor) * 1000;
   
   // 🔴 关键修复：实时判定计抛，使用 Math.round 防止浮点误差
-  const isActuallyVolumetric = Math.round(volumetricWeight) > Math.round(actualWeight);
+  const isActuallyVolumetric = Math.round(volumetricWeight) > Math.round(safeActualWeight);
   
   // 根据计费类型确定计费重量
   let billingWeight: number;
@@ -1402,7 +1406,7 @@ export function parseBillingWeight(
     normalizedBillingType.includes("max")
   ) {
     // 最大/取大: 取实重和体积重的最大值
-    billingWeight = Math.max(actualWeight, volumetricWeight);
+    billingWeight = Math.max(safeActualWeight, volumetricWeight);
     isVolumetric = isActuallyVolumetric;  // 🔴 使用实时判定
     billingTypeDesc = "取大";
   } else if (
@@ -1419,19 +1423,19 @@ export function parseBillingWeight(
     !normalizedBillingType.includes("取大")
   ) {
     // 纯实际: 只按实际重量计费
-    billingWeight = actualWeight;
+    billingWeight = safeActualWeight;
     isVolumetric = false;
     billingTypeDesc = "实际重";
   } else {
     // 默认行为: 取大
-    billingWeight = Math.max(actualWeight, volumetricWeight);
+    billingWeight = Math.max(safeActualWeight, volumetricWeight);
     isVolumetric = isActuallyVolumetric;  // 🔴 使用实时判定
     billingTypeDesc = "取大";
   }
   
   return {
     billingWeight,
-    actualWeight,
+    actualWeight: safeActualWeight,
     volumetricWeight,
     isVolumetric,
     divisor,
@@ -1473,16 +1477,18 @@ export function calculateShippingCost(
   actualWeight?: number
 ): number {
   // 🔴 关键修复：直接使用 varFeePerGram（每克运费），不转换
-  const varFeePerGram = channel.varFeePerGram;
+  const fixFee = Number.isFinite(channel.fixFee) ? Math.max(0, channel.fixFee) : 0;
+  const varFeePerGram = Number.isFinite(channel.varFeePerGram) ? Math.max(0, channel.varFeePerGram) : 0;
+  const safeChargeableWeight = Number.isFinite(chargeableWeight) ? Math.max(0, chargeableWeight) : 0;
   
   // 如果提供了尺寸和实际重量，说明调用方需要体积重计算
   if (length !== undefined && width !== undefined && height !== undefined && actualWeight !== undefined) {
     const { billingWeight } = parseBillingWeight(channel, length, width, height, actualWeight);
-    return channel.fixFee + varFeePerGram * billingWeight;
+    return fixFee + varFeePerGram * billingWeight;
   }
   
   // 兼容旧调用方式：直接使用传入的重量作为计费重量
-  return channel.fixFee + varFeePerGram * chargeableWeight;
+  return fixFee + varFeePerGram * safeChargeableWeight;
 }
 
 /**

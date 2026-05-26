@@ -45,17 +45,27 @@ const {
   calculateSuggestedPrice,
   calculateCpcCost,
   calculateExchangeRateStressTest,
+  calculateProfitCurve,
   calculateSixTierPricing,
   calculatePricingStrategies,
   calculateMultiItemProfit,
+  calculateVolumetricWeight,
   getChargeableWeight,
   calculateReturnCost,
   calculateMarginalContribution,
   calculateNetProfit,
+  calculateRequiredPriceRMB,
+  calculateROAS,
+  calculateBreakEvenROAS,
+  calculateBreakEvenACOS,
+  calculateCVRsensitivity,
   normalizePromotionDiscount,
   calculateOriginalPrice,
   calculateTaxSimulation,
   detectShippingDimensionLimits,
+  detectCommissionBlackHole,
+  detectCommissionTierBoundary,
+  detectShippingWeightBoundary,
   performFullCalculation,
   getCommissionRate,
   normalizeCommissionPriceRUB,
@@ -65,6 +75,13 @@ const {
 const {
   parseEuropeanNumber,
 } = loadTsModule(path.join("lib", "number-parsing.ts"));
+
+const {
+  cnyToRub,
+  getRiskAdjustedRevenueRMB,
+  getRiskAdjustedRubPerCny,
+  normalizeExchangeRateBuffer,
+} = loadTsModule(path.join("lib", "currency.ts"));
 
 const {
   buildColumnMapping,
@@ -189,9 +206,31 @@ assertEqual(parseEuropeanNumber("30,000.5"), 30000.5, "comma thousands with dot 
 assertEqual(parseEuropeanNumber("0,03432"), 0.03432, "comma decimal number");
 assertEqual(parseEuropeanNumber("2,6"), 2.6, "single comma decimal number");
 assertEqual(parseEuropeanNumber("30.5"), 30.5, "dot decimal number");
+assertEqual(normalizeExchangeRateBuffer(-5), 0, "exchange rate buffer should not go below 0%");
+assertEqual(normalizeExchangeRateBuffer(150), 100, "exchange rate buffer should be capped at 100%");
+assertApproxEqual(getRiskAdjustedRubPerCny(10, 10), 11, "exchange risk buffer should worsen RUB/CNY settlement rate");
+assertApproxEqual(getRiskAdjustedRevenueRMB(100, 10), 90.9090909090909, "exchange risk buffer should reduce RMB revenue");
+assertApproxEqual(
+  cnyToRub(getRiskAdjustedRevenueRMB(100, 10), getRiskAdjustedRubPerCny(10, 10)),
+  1000,
+  "risk-adjusted revenue and settlement rate should preserve front RUB price"
+);
 assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "bidCvr", 0, 200), 20, "CPC bid/CVR mode remains unchanged");
 assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", 7, 200), 14, "CPC sales percent mode");
 assertApproxEqual(calculateCpcCost(false, 10, 5, 10, "salesPercent", 7, 200), 0, "disabled CPC has no cost");
+assertApproxEqual(calculateCpcCost(true, -10, 5, 10, "bidCvr", 0, 200), 0, "negative CPC bid should not create negative ad cost");
+assertApproxEqual(calculateCpcCost(true, Infinity, 5, 10, "bidCvr", 0, 200), 0, "infinite CPC bid should not create infinite ad cost");
+assertApproxEqual(calculateCpcCost(true, 10, Infinity, 10, "bidCvr", 0, 200), 0, "infinite CPC CVR should not create ad cost");
+assertApproxEqual(calculateCpcCost(true, 10, 150, 10, "bidCvr", 0, 200), 1, "CPC CVR should be capped at 100%");
+assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", Infinity, 200), 0, "infinite CPC sales percent should not create infinite ad cost");
+assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", 7, Infinity), 0, "infinite price should not create infinite CPC sales percent cost");
+assertApproxEqual(calculateVolumetricWeight(-20, 10, 10), 0, "negative dimensions should not create negative volumetric weight");
+assertApproxEqual(calculateVolumetricWeight(20, 10, 10, 0), 0, "zero divisor should not create infinite volumetric weight");
+assertDeepEqual(
+  getChargeableWeight(-20, 10, 10, -300),
+  { volumetric: 0, chargeable: 0, isVolumetric: false },
+  "fallback chargeable weight should normalize invalid dimensions and weight"
+);
 
 const baseSuggestionInput = {
   primaryCategory: "测试一级",
@@ -277,6 +316,20 @@ const actualWeightBilling = parseBillingWeight(baseSuggestionChannel, 100, 100, 
 assertEqual(actualWeightBilling.divisor, 0, "volumetric divisor 0 should remain explicit no-volumetric billing");
 assertEqual(actualWeightBilling.volumetricWeight, 0, "no-volumetric channel should not synthesize dimensional weight");
 assertEqual(actualWeightBilling.billingWeight, 300, "no-volumetric channel should bill by actual weight");
+const malformedBilling = parseBillingWeight(
+  { ...baseSuggestionChannel, billingType: "取大", volumetricDivisor: 12000 },
+  -20,
+  10,
+  10,
+  -300
+);
+assertEqual(malformedBilling.billingWeight, 0, "negative dimensions and weight should not produce negative billing weight");
+assertEqual(malformedBilling.volumetricWeight, 0, "negative dimensions should not produce negative volumetric weight");
+assertEqual(
+  calculateShippingCost({ ...baseSuggestionChannel, fixFee: -5, varFeePerGram: -0.02 }, -300),
+  0,
+  "negative logistics fees and weights should not produce negative shipping cost"
+);
 assertDeepEqual(
   evaluateValueInterceptions(50, 600, { ...baseSuggestionChannel, minValue: 10, maxValue: 500, minValueRUB: 1000, maxValueRUB: 2000 }, "RMB"),
   [],
@@ -475,6 +528,12 @@ const rubLimitSuggestion = calculateSuggestedPrice(
   "RUB"
 );
 assertEqual(rubLimitSuggestion.suggestedPriceRMB, 20, "RUB value-limit suggestion should use RUB threshold");
+const negativeLimitSuggestion = calculateSuggestedPrice(
+  [{ ...baseSuggestionChannel, minValue: -50, minValueRUB: -600 }],
+  12,
+  "RMB"
+);
+assertEqual(negativeLimitSuggestion.suggestedPriceRMB, 0, "negative value-limit suggestion should not create a positive recommendation");
 
 const paymentFeeBaseResult = performFullCalculation(
   { ...baseSuggestionInput, targetPriceRMB: 100, withdrawalFee: 0, paymentFee: 0 },
@@ -764,6 +823,10 @@ assertEqual(normalizePromotionDiscount(-5), 0, "promotion discount should not go
 assertEqual(normalizePromotionDiscount(100), 99, "promotion discount should be capped below 100%");
 assertEqual(Number.isFinite(calculateOriginalPrice(100, 100)), true, "original price should stay finite at invalid 100% discount");
 assertApproxEqual(calculateOriginalPrice(100, 25), 133.33333333333334, "original price should reverse valid promotion discount");
+assertApproxEqual(calculateOriginalPrice(-100, 25), 0, "negative selling price should not create negative original price");
+assertApproxEqual(calculateOriginalPrice(Infinity, 25), 0, "infinite selling price should not create infinite original price");
+assertApproxEqual(calculateReturnCost("destroy", -20, 100, 10, 5), 0, "negative return rate should not create negative return cost");
+assertApproxEqual(calculateReturnCost("productOnly", 10, -100, 10, 5), 0, "negative product cost should not create negative return cost");
 
 const adCommission = {
   primaryCategory: "Test",
@@ -824,6 +887,66 @@ assertEqual(
   true,
   "over-budget ad result should explain ACOS threshold"
 );
+assertApproxEqual(calculateROAS(-100, 20), 0, "negative revenue should not create negative ROAS");
+assertApproxEqual(calculateROAS(100, -20), Infinity, "negative ad cost should not create negative ROAS denominator");
+assertApproxEqual(calculateBreakEvenROAS(-100, 20), 0, "negative total cost should not create negative break-even ROAS");
+assertApproxEqual(calculateBreakEvenACOS(Infinity, 10, 0, false, 0, 10), 0, "infinite price should not create non-finite break-even ACOS");
+assertDeepEqual(
+  calculateCVRsensitivity(5, -10, 10, 20, 100),
+  { costReduction: 0, profitIncreasePercent: 0, newCost: 0, currentCost: 0 },
+  "negative CPC bid should not create negative CVR sensitivity"
+);
+assertDeepEqual(
+  calculateCVRsensitivity(Infinity, 10, 10, 20, 100),
+  { costReduction: 0, profitIncreasePercent: 0, newCost: 0, currentCost: 0 },
+  "infinite CVR should not create CVR sensitivity"
+);
+assertApproxEqual(
+  calculateMarginalContribution(10, -5, -20, -3),
+  0.9,
+  "negative percentage fees should not inflate marginal contribution"
+);
+const negativeFeeResult = performFullCalculation(
+  { ...baseAdInput, cpaEnabled: true, cpaRate: -20, withdrawalFee: -5, paymentFee: -3, cpcEnabled: false },
+  adCommission,
+  undefined
+);
+assertApproxEqual(negativeFeeResult.profitMargin, 50, "negative percentage fees should be treated as zero in full calculation");
+assertApproxEqual(negativeFeeResult.costs.cpaCost, 0, "negative CPA rate should not create negative ad cost");
+assertApproxEqual(negativeFeeResult.costs.withdrawalFee, 0, "negative withdrawal fee should not create negative cost");
+assertApproxEqual(negativeFeeResult.costs.paymentFee, 0, "negative payment fee should not create negative cost");
+const negativeCostResult = performFullCalculation(
+  { ...baseAdInput, purchaseCost: -40, domesticShipping: -5, packagingFee: -3, returnRate: -50, cpaEnabled: false, cpcEnabled: false },
+  adCommission,
+  undefined
+);
+assertApproxEqual(negativeCostResult.costs.purchase, 0, "negative purchase cost should be normalized to zero in full calculation");
+assertApproxEqual(negativeCostResult.costs.domesticShipping, 0, "negative domestic shipping should be normalized to zero in full calculation");
+assertApproxEqual(negativeCostResult.costs.packaging, 0, "negative packaging fee should be normalized to zero in full calculation");
+assertApproxEqual(negativeCostResult.costs.returnCost, 0, "negative return rate should not reduce full calculation cost");
+assertApproxEqual(negativeCostResult.profitMargin, 90, "negative fixed costs should not inflate profit beyond zero-cost baseline");
+const negativePriceResult = performFullCalculation(
+  { ...baseAdInput, targetPriceRMB: -100, cpaEnabled: false, cpcEnabled: false },
+  adCommission,
+  undefined
+);
+assertEqual(Number.isFinite(negativePriceResult.netProfit), true, "negative target price should not create non-finite profit");
+assertApproxEqual(negativePriceResult.costs.commission, 0, "negative target price should not create negative commission cost");
+assertApproxEqual(negativePriceResult.netProfit, -40, "negative target price should be normalized to zero revenue");
+assertApproxEqual(negativePriceResult.profitMargin, 0, "negative target price should not create misleading margin");
+const infinitePriceResult = performFullCalculation(
+  { ...baseAdInput, targetPriceRMB: Infinity, cpaEnabled: false, cpcEnabled: false },
+  adCommission,
+  undefined
+);
+assertEqual(Number.isFinite(infinitePriceResult.netProfit), true, "infinite target price should not create infinite profit");
+assertApproxEqual(infinitePriceResult.netProfit, -40, "infinite target price should be normalized to zero revenue");
+const infiniteTaxSimulation = calculateTaxSimulation(
+  { ...baseAdInput, targetPriceRMB: Infinity, purchaseCost: 40, taxEnabled: true, vatRate: 20, corporateTaxRate: 20 },
+  10
+);
+assertEqual(Number.isFinite(infiniteTaxSimulation.outputVat), true, "tax simulation should not emit infinite output VAT");
+assertApproxEqual(infiniteTaxSimulation.outputVat, 0, "tax simulation should normalize infinite target price to zero revenue");
 
 const exchangeStress = calculateExchangeRateStressTest(100, 10, adCommission, 0, 0, 50, 0, 0, "RFBS");
 assertEqual(exchangeStress.at5PercentDrop < 40, true, "5% worse exchange rate should reduce profit");
@@ -833,6 +956,38 @@ assertApproxEqual(exchangeStress.zeroProfitRate, 18, "zero-profit exchange rate 
 const cpcStress = calculateExchangeRateStressTest(200, 10, adCommission, 0, 0, 60, 0, 12, "RFBS");
 const expectedCpcStress5 = calculateNetProfit(200 / 1.05, calculateMarginalContribution(10, 0, 0, 0), 60 + (200 / 1.05) * 0.12);
 assertApproxEqual(cpcStress.at5PercentDrop, expectedCpcStress5, "exchange stress should include sales-percent CPC at stressed RMB revenue");
+const invalidExchangeStress = calculateExchangeRateStressTest(-100, -10, adCommission, -5, -10, -50, -3, -20, "RFBS");
+assertEqual(Number.isFinite(invalidExchangeStress.at5PercentDrop), true, "invalid exchange stress should not emit non-finite 5% result");
+assertEqual(Number.isFinite(invalidExchangeStress.at10PercentDrop), true, "invalid exchange stress should not emit non-finite 10% result");
+assertApproxEqual(invalidExchangeStress.zeroProfitRate, 0, "invalid exchange stress should not emit a fake zero-profit exchange rate");
+
+const invalidProfitCurve = calculateProfitCurve([-100, Infinity, 100], -10, adCommission, -5, -10, -50, -3, -20, "RFBS");
+assertDeepEqual(
+  invalidProfitCurve.map((point) => ({
+    priceRMB: point.priceRMB,
+    priceFinite: Number.isFinite(point.priceRMB),
+    rubFinite: Number.isFinite(point.priceRUB),
+    profitFinite: Number.isFinite(point.profit),
+    profitNonNegativeCost: point.profit <= point.priceRMB,
+  })),
+  [
+    { priceRMB: 0, priceFinite: true, rubFinite: true, profitFinite: true, profitNonNegativeCost: true },
+    { priceRMB: 0, priceFinite: true, rubFinite: true, profitFinite: true, profitNonNegativeCost: true },
+    { priceRMB: 100, priceFinite: true, rubFinite: true, profitFinite: true, profitNonNegativeCost: true },
+  ],
+  "profit curve should normalize invalid prices and costs"
+);
+assertEqual(
+  detectCommissionBlackHole(-100, -10, adCommission, -5, -10, -50, Infinity, -3, "RFBS"),
+  null,
+  "malformed commission black-hole inputs should not create a fake warning"
+);
+const malformedTierBoundary = detectCommissionTierBoundary(Infinity, -10, adCommission, -5, -10, -50, -3, "RFBS");
+assertEqual(Number.isFinite(malformedTierBoundary.lowerPriceRMB || 0), true, "malformed tier boundary should not emit non-finite RMB price");
+assertEqual(Number.isFinite(malformedTierBoundary.profitIncrease || 0), true, "malformed tier boundary should not emit non-finite profit increase");
+const malformedWeightBoundary = detectShippingWeightBoundary(Infinity, { ...baseSuggestionChannel, pricePerKg: Infinity });
+assertEqual(Number.isFinite(malformedWeightBoundary.weightToReduce || 0), true, "malformed weight boundary should not emit non-finite weight reduction");
+assertEqual(Number.isFinite(malformedWeightBoundary.costSaving || 0), true, "malformed weight boundary should not emit non-finite cost saving");
 
 const marginStrategyCommission = {
   primaryCategory: "Test",
@@ -844,10 +999,50 @@ assertApproxEqual(marginStrategies.breakEven, 55.56, "pricing strategy break-eve
 assertApproxEqual(marginStrategies.lowProfit, 62.5, "pricing strategy low profit should target 10% sales margin", 0.01);
 assertApproxEqual(marginStrategies.mediumProfit, 71.43, "pricing strategy medium profit should target 20% sales margin", 0.01);
 assertApproxEqual(marginStrategies.highProfit, 83.34, "pricing strategy high profit should target 30% sales margin", 0.01);
+assertApproxEqual(calculateNetProfit(-100, 0.8, -50), 0, "net profit should normalize invalid revenue and fixed cost");
+assertApproxEqual(calculateRequiredPriceRMB(-20, 0.8, -50), 0, "required price should normalize invalid target profit and fixed cost");
+const malformedStrategies = calculatePricingStrategies(marginStrategyCommission, -10, -5, -10, -50, -3, Infinity, "RFBS");
+assertDeepEqual(
+  Object.values(malformedStrategies).map((value) => Number.isFinite(value) && value >= 0),
+  [true, true, true, true],
+  "pricing strategies should stay finite and non-negative for malformed inputs"
+);
 
 const zeroFeePricing = calculateSixTierPricing({ ...baseAdInput, cpaEnabled: false, cpaRate: 0 }, adCommission, undefined);
 assertEqual(zeroFeePricing[0].disabled, false, "six-tier pricing should calculate with zero withdrawal fee");
 assertApproxEqual(zeroFeePricing[0].priceRMB, 42.11, "six-tier pricing should preserve explicit 0% withdrawal fee", 0.01);
+
+const highSalesCpcSixTier = calculateSixTierPricing(
+  { ...baseAdInput, cpaEnabled: false, cpaRate: 0, cpcEnabled: true, cpcBillingMode: "salesPercent", cpcSalesPercent: 40 },
+  adCommission,
+  undefined
+);
+const highSalesCpcTier = highSalesCpcSixTier.find((tier) => tier.label === "高毛利");
+assertEqual(highSalesCpcTier?.disabled, false, "six-tier pricing should solve feasible high sales-percent CPC targets directly");
+assertApproxEqual(highSalesCpcTier?.priceRMB || 0, 200, "six-tier high margin price should include sales-percent CPC in denominator", 0.01);
+const highSalesCpcForward = performFullCalculation(
+  { ...baseAdInput, cpaEnabled: false, cpaRate: 0, cpcEnabled: true, cpcBillingMode: "salesPercent", cpcSalesPercent: 40, targetPriceRMB: highSalesCpcTier?.priceRMB || 0 },
+  adCommission,
+  undefined
+);
+assertApproxEqual(highSalesCpcForward.profitMargin, 30, "six-tier high margin price should forward-calculate to target margin", 0.05);
+
+const boundarySalesCpcSixTier = calculateSixTierPricing(
+  { ...baseAdInput, purchaseCost: 50, cpaEnabled: false, cpaRate: 0, cpcEnabled: true, cpcBillingMode: "salesPercent", cpcSalesPercent: 30 },
+  {
+    primaryCategory: "Test",
+    secondaryCategory: "TierBoundary",
+    tiers: [
+      { min: 0, max: 1500, rate: 10 },
+      { min: 1500.01, max: 5000, rate: 15 },
+      { min: 5000.01, max: null, rate: 20 },
+    ],
+  },
+  undefined
+);
+const boundaryExtremeTier = boundarySalesCpcSixTier.find((tier) => tier.label === "极限价");
+assertEqual(boundaryExtremeTier?.disabled, false, "six-tier pricing should keep feasible commission-boundary targets enabled");
+assertApproxEqual(boundaryExtremeTier?.priceRMB || 0, 500, "six-tier pricing should not round a boundary solution into the next commission tier", 0.001);
 
 const multiItemSingle = calculateMultiItemProfit(1, { ...baseSuggestionInput, targetPriceRMB: 100 }, baseSuggestionChannel, suggestionCommission);
 const multiItemFull = performFullCalculation({ ...baseSuggestionInput, targetPriceRMB: 100 }, suggestionCommission, baseSuggestionChannel);
@@ -912,6 +1107,17 @@ assertApproxEqual(
   multiItemZeroCount.profitPerItem,
   calculateMultiItemProfit(1, multiItemInput, baseSuggestionChannel, suggestionCommission).profitPerItem,
   "multi-item count 0 should be normalized to one item"
+);
+const malformedMultiItem = calculateMultiItemProfit(
+  Infinity,
+  { ...multiItemInput, targetPriceRMB: Infinity, exchangeRate: -10, withdrawalFee: 200, cpaEnabled: true, cpaRate: 200, paymentFee: 200 },
+  { ...baseSuggestionChannel, fixFee: -5, varFeePerGram: -0.02 },
+  suggestionCommission
+);
+assertDeepEqual(
+  Object.values(malformedMultiItem).map((value) => Number.isFinite(value)),
+  [true, true, true],
+  "malformed multi-item profit should not emit non-finite values"
 );
 
 const cappedTaxSimulation = calculateTaxSimulation(
