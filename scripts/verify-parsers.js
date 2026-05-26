@@ -51,6 +51,7 @@ const {
 
 const {
   calculateSuggestedPrice,
+  calculateCpaCost,
   calculateCpcCost,
   calculateExchangeRateStressTest,
   calculateProfitCurve,
@@ -261,6 +262,7 @@ assertApproxEqual(calculateCpcCost(true, Infinity, 5, 10, "bidCvr", 0, 200), 0, 
 assertApproxEqual(calculateCpcCost(true, 10, Infinity, 10, "bidCvr", 0, 200), 0, "infinite CPC CVR should not create ad cost");
 assertApproxEqual(calculateCpcCost(true, 10, 150, 10, "bidCvr", 0, 200), 1, "CPC CVR should be capped at 100%");
 assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", Infinity, 200), 0, "infinite CPC sales percent should not create infinite ad cost");
+assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", 200, 100), 100, "CPC sales percent should cap percentage rate at 100%");
 assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", 7, Infinity), 0, "infinite price should not create infinite CPC sales percent cost");
 assertApproxEqual(calculateVolumetricWeight(-20, 10, 10), 0, "negative dimensions should not create negative volumetric weight");
 assertApproxEqual(calculateVolumetricWeight(20, 10, 10, 0), 0, "zero divisor should not create infinite volumetric weight");
@@ -534,6 +536,10 @@ if (profitSuggestion.suggestedPriceRMB < fallbackSuggestion.suggestedPriceRMB) {
 }
 assertEqual(profitSuggestion.reason, "profit-target", "profit-aware suggestion reason");
 assertEqual(profitSuggestion.targetMargin, 20, "profit-aware suggestion target margin");
+const nonFiniteTargetMarginSuggestion = calculateSuggestedPrice([baseSuggestionChannel], 12, "RMB", baseSuggestionInput, suggestionCommission, NaN);
+assertEqual(nonFiniteTargetMarginSuggestion.reason, "profit-target", "non-finite target margin should fall back to default profit target");
+assertEqual(nonFiniteTargetMarginSuggestion.targetMargin, 20, "non-finite target margin should normalize to the default target margin");
+assertEqual(nonFiniteTargetMarginSuggestion.suggestedPriceRMB > 0, true, "non-finite target margin should not make a fixable channel unfixable");
 
 const preciseSuggestionInput = {
   ...baseSuggestionInput,
@@ -934,6 +940,9 @@ assertApproxEqual(calculateOriginalPrice(100, 25), 133.33333333333334, "original
 assertApproxEqual(calculateOriginalPrice(-100, 25), 0, "negative selling price should not create negative original price");
 assertApproxEqual(calculateOriginalPrice(Infinity, 25), 0, "infinite selling price should not create infinite original price");
 assertApproxEqual(calculateReturnCost("destroy", -20, 100, 10, 5), 0, "negative return rate should not create negative return cost");
+assertApproxEqual(calculateReturnCost("destroy", 200, 100, 10, 5), 115, "return rate above 100% should be capped at one full return loss");
+assertApproxEqual(calculateReturnCost("resell", 200, 100, 10, 5), 5, "resell return rate above 100% should cap at one international shipping loss");
+assertApproxEqual(calculateReturnCost("productOnly", 200, 100, 10, 5), 100, "product-only return rate above 100% should cap at one product loss");
 assertApproxEqual(calculateReturnCost("productOnly", 10, -100, 10, 5), 0, "negative product cost should not create negative return cost");
 
 const adCommission = {
@@ -1014,6 +1023,46 @@ assertApproxEqual(
   0.9,
   "negative percentage fees should not inflate marginal contribution"
 );
+assertApproxEqual(
+  calculateMarginalContribution(10, 200, 0, 0),
+  0,
+  "withdrawal fee above 100% should be capped at 100% in marginal contribution"
+);
+assertApproxEqual(
+  calculateMarginalContribution(10, 0, 200, 0),
+  -0.1,
+  "CPA rate above 100% should be capped at 100% in marginal contribution"
+);
+assertApproxEqual(
+  calculateMarginalContribution(10, 0, 0, 200),
+  -0.1,
+  "payment fee above 100% should be capped at 100% in marginal contribution"
+);
+assertApproxEqual(
+  calculateCpaCost(true, 200, 100),
+  100,
+  "CPA cost should cap percentage rate at 100%"
+);
+const excessivePercentageFeeResult = performFullCalculation(
+  { ...baseAdInput, cpaEnabled: true, cpaRate: 200, withdrawalFee: 200, paymentFee: 200, cpcEnabled: false },
+  adCommission,
+  undefined
+);
+assertApproxEqual(
+  excessivePercentageFeeResult.costs.cpaCost,
+  100,
+  "full calculation CPA cost should cap percentage rate at 100%"
+);
+assertApproxEqual(
+  excessivePercentageFeeResult.costs.withdrawalFee,
+  90,
+  "full calculation withdrawal fee should cap percentage rate at 100%"
+);
+assertApproxEqual(
+  excessivePercentageFeeResult.costs.paymentFee,
+  100,
+  "full calculation payment fee should cap percentage rate at 100%"
+);
 const negativeFeeResult = performFullCalculation(
   { ...baseAdInput, cpaEnabled: true, cpaRate: -20, withdrawalFee: -5, paymentFee: -3, cpcEnabled: false },
   adCommission,
@@ -1055,6 +1104,21 @@ const infiniteTaxSimulation = calculateTaxSimulation(
 );
 assertEqual(Number.isFinite(infiniteTaxSimulation.outputVat), true, "tax simulation should not emit infinite output VAT");
 assertApproxEqual(infiniteTaxSimulation.outputVat, 0, "tax simulation should normalize infinite target price to zero revenue");
+const infinitePreTaxSimulation = calculateTaxSimulation(
+  { ...baseAdInput, targetPriceRMB: 100, taxEnabled: true, vatRate: 20, corporateTaxRate: 20 },
+  Infinity
+);
+assertDeepEqual(
+  [
+    Number.isFinite(infinitePreTaxSimulation.preTaxNetProfit),
+    Number.isFinite(infinitePreTaxSimulation.corporateTax),
+    Number.isFinite(infinitePreTaxSimulation.afterTaxNetProfit),
+    Number.isFinite(infinitePreTaxSimulation.afterTaxProfitMargin),
+  ],
+  [true, true, true, true],
+  "tax simulation should normalize non-finite pre-tax profit"
+);
+assertApproxEqual(infinitePreTaxSimulation.preTaxNetProfit, 0, "non-finite pre-tax profit should normalize to zero");
 
 const exchangeStress = calculateExchangeRateStressTest(100, 10, adCommission, 0, 0, 50, 0, 0, "RFBS");
 assertEqual(exchangeStress.at5PercentDrop < 40, true, "5% worse exchange rate should reduce profit");
@@ -1085,6 +1149,12 @@ assertDeepEqual(
   ],
   "profit curve should normalize invalid prices and costs"
 );
+const cappedCpcProfitCurve = calculateProfitCurve([100], 10, adCommission, 0, 0, 50, 0, 200, "RFBS");
+assertApproxEqual(
+  cappedCpcProfitCurve[0].profit,
+  -60,
+  "profit curve should cap CPC sales percent at 100%"
+);
 assertEqual(
   detectCommissionBlackHole(-100, -10, adCommission, -5, -10, -50, Infinity, -3, "RFBS"),
   null,
@@ -1109,6 +1179,9 @@ assertApproxEqual(marginStrategies.mediumProfit, 71.43, "pricing strategy medium
 assertApproxEqual(marginStrategies.highProfit, 83.34, "pricing strategy high profit should target 30% sales margin", 0.01);
 assertApproxEqual(calculateNetProfit(-100, 0.8, -50), 0, "net profit should normalize invalid revenue and fixed cost");
 assertApproxEqual(calculateRequiredPriceRMB(-20, 0.8, -50), 0, "required price should normalize invalid target profit and fixed cost");
+assertApproxEqual(calculateRequiredPriceRMB(10, 0, 50), 0, "required price should not emit Infinity when marginal contribution is zero");
+assertApproxEqual(calculateRequiredPriceRMB(10, -0.1, 50), 0, "required price should not emit Infinity when marginal contribution is negative");
+assertApproxEqual(calculateRequiredPriceRMB(10, Infinity, 50), 0, "required price should not emit Infinity when marginal contribution is non-finite");
 const malformedStrategies = calculatePricingStrategies(marginStrategyCommission, -10, -5, -10, -50, -3, Infinity, "RFBS");
 assertDeepEqual(
   Object.values(malformedStrategies).map((value) => Number.isFinite(value) && value >= 0),

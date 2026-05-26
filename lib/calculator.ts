@@ -58,6 +58,11 @@ function normalizeNonNegativePercent(value: number): number {
   return Math.max(0, parsed);
 }
 
+function normalizeTargetMarginPercent(value: number, fallback: number = 20): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function normalizeMoney(value: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
@@ -202,7 +207,7 @@ export function calculateReturnCost(
   domesticShipping: number,
   internationalShipping: number
 ): number {
-  const rate = normalizeNonNegativePercent(returnRate) / 100;
+  const rate = normalizePercent(returnRate) / 100;
   const safePurchaseCost = normalizeMoney(purchaseCost);
   const safeDomesticShipping = normalizeMoney(domesticShipping);
   const safeInternationalShipping = normalizeMoney(internationalShipping);
@@ -235,7 +240,7 @@ export function calculateCpcCost(
   if (!cpcEnabled) return 0;
   if (cpcBillingMode === "salesPercent") {
     const safePriceRMB = normalizeMoney(priceRMB);
-    const safeSalesPercent = normalizeNonNegativePercent(cpcSalesPercent);
+    const safeSalesPercent = normalizePercent(cpcSalesPercent);
     if (safeSalesPercent <= 0 || safePriceRMB <= 0) return 0;
     return safePriceRMB * (safeSalesPercent / 100);
   }
@@ -269,7 +274,7 @@ export function calculateCpaCost(
   priceRMB: number // RMB
 ): number {
   if (!cpaEnabled) return 0;
-  return priceRMB * (normalizeNonNegativePercent(cpaRate) / 100);
+  return priceRMB * (normalizePercent(cpaRate) / 100);
 }
 
 /**
@@ -282,10 +287,10 @@ export function calculateMarginalContribution(
   cpaRate: number,
   paymentFee: number = 0
 ): number {
-  const C = normalizeNonNegativePercent(commissionRate) / 100;
-  const W = normalizeNonNegativePercent(withdrawalFee) / 100;
-  const Acpa = normalizeNonNegativePercent(cpaRate) / 100;
-  const Pfee = normalizeNonNegativePercent(paymentFee) / 100;
+  const C = normalizePercent(commissionRate) / 100;
+  const W = normalizePercent(withdrawalFee) / 100;
+  const Acpa = normalizePercent(cpaRate) / 100;
+  const Pfee = normalizePercent(paymentFee) / 100;
   return (1 - C) * (1 - W) - Acpa - Pfee;
 }
 
@@ -317,7 +322,7 @@ export function calculateRequiredPriceRMB(
   const safeTargetProfitRMB = normalizeMoney(targetProfitRMB);
   const safeTotalFixedCost = normalizeMoney(totalFixedCost);
   const safeMarginalContribution = Number.isFinite(Number(marginalContribution)) ? Number(marginalContribution) : 0;
-  if (safeMarginalContribution <= 0) return Infinity;
+  if (safeMarginalContribution <= 0) return 0;
   return (safeTotalFixedCost + safeTargetProfitRMB) / safeMarginalContribution;
 }
 
@@ -342,10 +347,11 @@ export function reversePriceFromMargin(
   shippingChannel: ShippingChannel | undefined
 ): { priceRMB: number; commissionRate: number; error?: string } {
   
-  const T_m = targetMarginPercent / 100;
+  const safeTargetMarginPercent = normalizeTargetMarginPercent(targetMarginPercent);
+  const T_m = safeTargetMarginPercent / 100;
   const variableCpcRate =
     input.cpcEnabled && (input.cpcBillingMode || "bidCvr") === "salesPercent"
-      ? Math.max(0, input.cpcSalesPercent || 0) / 100
+      ? normalizePercent(input.cpcSalesPercent || 0) / 100
       : 0;
   
   // 1. 计算不依赖售价的固定成本部分
@@ -526,7 +532,7 @@ export function calculateSixTierPricing(
   const cpaRate = input.cpaEnabled ? parseFiniteNumber(input.cpaRate, 0) : 0;
   const variableCpcRate =
     input.cpcEnabled && (input.cpcBillingMode || "bidCvr") === "salesPercent"
-      ? Math.max(0, input.cpcSalesPercent || 0) / 100
+      ? normalizePercent(input.cpcSalesPercent || 0) / 100
       : 0;
 
   return anchors.map((anchor) => {
@@ -708,7 +714,7 @@ export function calculatePricingStrategies(
   const safeCpaRate = normalizeNonNegativePercent(cpaRate);
   const safeTotalFixedCost = normalizeMoney(totalFixedCost);
   const safePaymentFee = normalizeNonNegativePercent(paymentFee);
-  const safeCpcSalesPercent = normalizeNonNegativePercent(cpcSalesPercent);
+  const safeCpcSalesPercent = normalizePercent(cpcSalesPercent);
 
   for (let i = 0; i < targetMargins.length; i++) {
     const targetMargin = targetMargins[i];
@@ -811,7 +817,7 @@ export function calculateExchangeRateStressTest(
   const wFee = normalizeNonNegativePercent(withdrawalFee);
   const cRate = normalizeNonNegativePercent(cpaRate);
   const pFee = normalizeNonNegativePercent(paymentFee);
-  const cpcRate = normalizeNonNegativePercent(cpcSalesPercent) / 100;
+  const cpcRate = normalizePercent(cpcSalesPercent) / 100;
   const fCost = normalizeMoney(totalFixedCost);
   
   // 🔹 前台卢布售价（固定）
@@ -930,7 +936,7 @@ export function calculateProfitCurve(
   const safeCpaRate = normalizeNonNegativePercent(cpaRate);
   const safePaymentFee = normalizeNonNegativePercent(paymentFee);
   const safeTotalFixedCost = normalizeMoney(totalFixedCost);
-  const cpcRate = normalizeNonNegativePercent(cpcSalesPercent) / 100;
+  const cpcRate = normalizePercent(cpcSalesPercent) / 100;
   return priceRangeRMB.map((rawPriceRMB) => {
     const priceRMB = normalizeMoney(rawPriceRMB);
     const priceRUB = cnyToRub(priceRMB, safeExchangeRate);
@@ -1147,6 +1153,7 @@ export function calculateTaxSimulation(
   const vatRate = normalizedVatRate / 100;
   const corporateTaxRate = normalizedCorporateTaxRate / 100;
   const priceRMB = normalizeMoney(input.targetPriceRMB);
+  const safePreTaxNetProfit = Number.isFinite(Number(preTaxNetProfit)) ? Number(preTaxNetProfit) : 0;
 
   if (!enabled) {
     return {
@@ -1157,18 +1164,18 @@ export function calculateTaxSimulation(
       inputVatCredit: 0,
       vatPayable: 0,
       corporateTax: 0,
-      preTaxNetProfit,
-      afterTaxNetProfit: preTaxNetProfit,
-      afterTaxProfitMargin: priceRMB > 0 ? (preTaxNetProfit / priceRMB) * 100 : 0,
+      preTaxNetProfit: safePreTaxNetProfit,
+      afterTaxNetProfit: safePreTaxNetProfit,
+      afterTaxProfitMargin: priceRMB > 0 ? (safePreTaxNetProfit / priceRMB) * 100 : 0,
     };
   }
 
   const outputVat = priceRMB * vatRate;
   const inputVatCredit = (normalizeMoney(input.purchaseCost) + normalizeMoney(input.domesticShipping) + normalizeMoney(input.packagingFee)) * vatRate;
   const vatPayable = Math.max(0, outputVat - inputVatCredit);
-  const taxableProfit = Math.max(0, preTaxNetProfit - vatPayable);
+  const taxableProfit = Math.max(0, safePreTaxNetProfit - vatPayable);
   const corporateTax = taxableProfit * corporateTaxRate;
-  const afterTaxNetProfit = preTaxNetProfit - vatPayable - corporateTax;
+  const afterTaxNetProfit = safePreTaxNetProfit - vatPayable - corporateTax;
 
   return {
     enabled,
@@ -1178,7 +1185,7 @@ export function calculateTaxSimulation(
     inputVatCredit,
     vatPayable,
     corporateTax,
-    preTaxNetProfit,
+    preTaxNetProfit: safePreTaxNetProfit,
     afterTaxNetProfit,
     afterTaxProfitMargin: priceRMB > 0 ? (afterTaxNetProfit / priceRMB) * 100 : 0,
   };
@@ -1480,7 +1487,7 @@ export function performFullCalculation(
   const totalAdCost = cpcCost + cpaCost;
   const variableCpcSalesPercent =
     input.cpcEnabled && (input.cpcBillingMode || "bidCvr") === "salesPercent"
-      ? input.cpcSalesPercent || 0
+      ? normalizePercent(input.cpcSalesPercent || 0)
       : 0;
 
   // 退货成本 (RMB)
@@ -1517,8 +1524,8 @@ export function performFullCalculation(
   const commissionAmount = priceRMB * (commissionRate / 100);
 
   // 提现手续费金额 (RMB) = P_rmb × (1-C%) × W%
-  const withdrawalFeeAmount = priceRMB * (1 - normalizeNonNegativePercent(commissionRate) / 100) * (normalizeNonNegativePercent(input.withdrawalFee) / 100);
-  const paymentFeeAmount = priceRMB * (normalizeNonNegativePercent(input.paymentFee || 0) / 100);
+  const withdrawalFeeAmount = priceRMB * (1 - normalizePercent(commissionRate) / 100) * (normalizePercent(input.withdrawalFee) / 100);
+  const paymentFeeAmount = priceRMB * (normalizePercent(input.paymentFee || 0) / 100);
 
   // ROI（投资回报率）= 净利润 ÷ 总成本 × 100%
   // 总成本包含所有实际支出（采购+头程+包装+跨境运费+佣金+提现手续费+支付手续费+广告+退货损耗）
@@ -1741,6 +1748,7 @@ export function calculateSuggestedPrice(
 ): SuggestedPriceResult {
   const fixableChannels: SuggestedPriceResult["fixableChannels"] = [];
   let unfixableCount = 0;
+  const safeTargetMargin = normalizeTargetMarginPercent(targetMargin);
 
   for (const ch of unavailableChannels) {
     if (!ch.interceptionReasons || ch.interceptionReasons.length === 0) continue;
@@ -1758,7 +1766,7 @@ export function calculateSuggestedPrice(
 
       if (input && commission) {
         const reverseResult = reversePriceFromMargin(
-          targetMargin,
+          safeTargetMargin,
           { ...input, targetPriceRMB: Math.max(input.targetPriceRMB || 0, logisticsPriceRMB, 100) },
           commission,
           ch
@@ -1809,7 +1817,7 @@ export function calculateSuggestedPrice(
     unfixableChannelCount: unfixableCount,
     cannotFixByPrice: fixableChannels.length === 0 && unfixableCount > 0,
     reason: best?.reason || "none",
-    targetMargin: best?.reason === "profit-target" ? targetMargin : null,
+    targetMargin: best?.reason === "profit-target" ? safeTargetMargin : null,
     profitPriceRMB: best?.profitPriceRMB,
     logisticsPriceRMB: best?.logisticsPriceRMB || 0,
   };
