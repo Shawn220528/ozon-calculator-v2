@@ -29,11 +29,13 @@ export function parseCommissionPercent(value: string | number | null | undefined
   if (value === null || value === undefined) return undefined;
   const raw = String(value).trim();
   if (!raw || raw === "-") return undefined;
+  if (/inf(?:inity)?/i.test(raw)) return 0;
 
   const numeric = Number.parseFloat(raw.replace(",", ".").replace(/[^\d.-]/g, ""));
   if (!Number.isFinite(numeric)) return undefined;
 
-  return !raw.includes("%") && numeric > 0 && numeric <= 1 ? numeric * 100 : numeric;
+  const percent = !raw.includes("%") && numeric > 0 && numeric <= 1 ? numeric * 100 : numeric;
+  return Math.min(100, Math.max(0, percent));
 }
 
 function createCommissionTiers(rate1: number, rate2: number, rate3: number): CommissionTier[] {

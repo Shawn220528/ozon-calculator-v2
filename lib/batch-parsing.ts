@@ -1,4 +1,5 @@
 import Papa from "papaparse";
+import { parseEuropeanNumber } from "./number-parsing";
 import type { CalculationInput } from "./types";
 
 export interface BatchInputRow extends Partial<CalculationInput> {
@@ -11,10 +12,8 @@ export interface BatchParseResult {
 }
 
 function parseNumeric(value: string): number {
-  const normalized = value.replace(/\s/g, "").replace(",", ".");
-  if (!normalized) return 0;
-  const parsed = Number.parseFloat(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
+  const parsed = parseEuropeanNumber(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 }
 
 function parseYesNo(value: string): boolean {

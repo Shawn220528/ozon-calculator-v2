@@ -1,4 +1,5 @@
 import type { ShippingChannel } from "./types";
+import { parseEuropeanNumber } from "./number-parsing";
 import {
   parseDeliveryTime,
   parseShippingRateString,
@@ -8,6 +9,11 @@ function generateShippingUniqueId(name: string, serviceLevel: string): string {
   const normalizedName = (name || "").trim().toLowerCase().replace(/\s+/g, "-");
   const normalizedLevel = (serviceLevel || "").trim().toLowerCase().replace(/\s+/g, "-");
   return `${normalizedName}_${normalizedLevel}`;
+}
+
+export function normalizeOzonRating(value: string | number | null | undefined): number {
+  const parsedRating = parseEuropeanNumber(value);
+  return Number.isFinite(parsedRating) ? Math.max(0, parsedRating) : 0;
 }
 
 export function parseAlternativeShippingRows(rawRows: string[][]): ShippingChannel[] {
@@ -21,7 +27,7 @@ export function parseAlternativeShippingRows(rawRows: string[][]): ShippingChann
     const name = row[1]?.trim();
     if (!name) continue;
 
-    const rating = Number.parseFloat(row[2]) || 0;
+    const rating = normalizeOzonRating(row[2]);
     const time = parseDeliveryTime(row[3] || "");
     const { fixFee, varFeePerGram } = parseShippingRateString(row[4] || "");
     const serviceLevel = "";

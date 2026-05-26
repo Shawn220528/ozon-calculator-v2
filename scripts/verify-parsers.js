@@ -24,8 +24,16 @@ const {
 } = loadTsModule(path.join("lib", "batch-parsing.ts"));
 
 const {
+  normalizeOzonRating,
   parseAlternativeShippingRows,
 } = loadTsModule(path.join("lib", "shipping-alternative-parsing.ts"));
+
+const {
+  createShippingChannel,
+  parseDimensions,
+  parsePriceRange,
+  parseVolumetricDivisor,
+} = loadTsModule(path.join("lib", "shipping-parser.ts"));
 
 const {
   getBatchTemplateCsv,
@@ -81,6 +89,7 @@ const {
   getRiskAdjustedRevenueRMB,
   getRiskAdjustedRubPerCny,
   normalizeExchangeRateBuffer,
+  rubToCny,
 } = loadTsModule(path.join("lib", "currency.ts"));
 
 const {
@@ -88,7 +97,9 @@ const {
 } = loadTsModule(path.join("lib", "constants.ts"));
 
 const {
+  parseSizeConstraints,
   smartParseCSV,
+  validateSizeConstraints,
 } = loadTsModule(path.join("lib", "smart-parser.ts"));
 
 const {
@@ -192,6 +203,8 @@ function assertSmartShippingWorkbookMapping(workbookPath, label) {
   ["2026-05-14", { min: 5, max: 14, normalizedFromDate: true }],
   ["5/14/2026", { min: 5, max: 14, normalizedFromDate: true }],
   ["17-29", { min: 17, max: 29, normalizedFromDate: false }],
+  ["-5-14", { min: 20, max: 40, normalizedFromDate: false }],
+  ["5--14", { min: 20, max: 40, normalizedFromDate: false }],
 ].forEach(([input, expected]) => {
   assertDeepEqual(parseDeliveryTime(input), expected, `delivery time: ${input}`);
 });
@@ -199,7 +212,28 @@ function assertSmartShippingWorkbookMapping(workbookPath, label) {
 assertDeepEqual(parseValueRange("0.01 - 135"), { min: 0.01, max: 135, hasLimit: true }, "RMB value range");
 assertDeepEqual(parseValueRange("1 - 1500"), { min: 1, max: 1500, hasLimit: true }, "RUB value range");
 assertDeepEqual(parseValueRange("-"), { min: 0, max: 0, hasLimit: false }, "empty value range");
+assertDeepEqual(parseValueRange("-10 - 20"), { min: 0, max: 20, hasLimit: true }, "negative range minimum should clamp to zero");
+assertDeepEqual(parsePriceRange("-10 - 20"), { min: 0, max: 20 }, "shipping parser price range should clamp negative minimum to zero");
+assertDeepEqual(parseDimensions("边长总和 ≤ -90 cm, 长边 ≤ -60 cm"), { maxSum: 0, maxSide: 0 }, "shipping parser dimensions should clamp negative limits to zero");
+assertEqual(parseVolumetricDivisor("长 × 宽 × 高 ÷ -12000"), Infinity, "negative volumetric divisor should mean no volumetric divisor");
+assertDeepEqual(
+  parseSizeConstraints("边长总和 ≤ -90 cm, 长边 ≤ -60 cm"),
+  { maxSum: 0, maxLongEdge: 0, rawText: "边长总和 ≤ -90 cm, 长边 ≤ -60 cm" },
+  "smart parser size constraints should clamp negative limits to zero"
+);
+assertDeepEqual(
+  parseSizeConstraints("边长总和 ≤ 90,5 cm, 长边 ≤ 60,5 cm"),
+  { maxSum: 90.5, maxLongEdge: 60.5, rawText: "边长总和 ≤ 90,5 cm, 长边 ≤ 60,5 cm" },
+  "smart parser size constraints should preserve comma decimals"
+);
+assertEqual(
+  validateSizeConstraints(-100, 100, 100, { maxSum: 150, maxLongEdge: null, rawText: "test" }).isValid,
+  false,
+  "smart parser size validation should not let negative product dimensions bypass sum limits"
+);
 assertEqual(normalizeLimitValue(999999), undefined, "999999 should mean no limit");
+assertEqual(normalizeLimitValue(0), undefined, "zero should mean no value limit");
+assertEqual(normalizeLimitValue(-5), undefined, "negative value limit should mean no limit");
 assertEqual(parseEuropeanNumber("30,000"), 30000, "comma thousands number");
 assertEqual(parseEuropeanNumber("30 000"), 30000, "space thousands number");
 assertEqual(parseEuropeanNumber("30,000.5"), 30000.5, "comma thousands with dot decimal number");
@@ -215,6 +249,10 @@ assertApproxEqual(
   1000,
   "risk-adjusted revenue and settlement rate should preserve front RUB price"
 );
+assertApproxEqual(cnyToRub(-100, 12), 0, "negative CNY should not convert to negative RUB");
+assertApproxEqual(rubToCny(-1200, 12), 0, "negative RUB should not convert to negative CNY");
+assertApproxEqual(getRiskAdjustedRevenueRMB(-100, 10), 0, "negative RMB revenue should not create negative risk-adjusted revenue");
+assertApproxEqual(getRiskAdjustedRevenueRMB(Infinity, 10), 0, "infinite RMB revenue should not create infinite risk-adjusted revenue");
 assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "bidCvr", 0, 200), 20, "CPC bid/CVR mode remains unchanged");
 assertApproxEqual(calculateCpcCost(true, 10, 5, 10, "salesPercent", 7, 200), 14, "CPC sales percent mode");
 assertApproxEqual(calculateCpcCost(false, 10, 5, 10, "salesPercent", 7, 200), 0, "disabled CPC has no cost");
@@ -346,6 +384,16 @@ assertDeepEqual(
   "zero lower bound and sentinel upper bound should not block value"
 );
 assertDeepEqual(
+  evaluateValueInterceptions(Infinity, Infinity, { ...baseSuggestionChannel, minValue: undefined, maxValue: 500 }, "RMB"),
+  [],
+  "infinite prices should normalize to zero before value upper-limit interception"
+);
+assertDeepEqual(
+  evaluateValueInterceptions(-100, -1200, { ...baseSuggestionChannel, minValue: 10, maxValue: 500 }, "RMB").map((reason) => reason.code),
+  ["VALUE_TOO_LOW"],
+  "negative prices should normalize to zero before value lower-limit interception"
+);
+assertDeepEqual(
   evaluateWeightInterceptions(5, { ...baseSuggestionChannel, minWeight: 10, maxWeight: 1000 }, { minWeight: false, maxWeight: true }),
   [],
   "disabled min weight interception should not block below-min packages"
@@ -359,6 +407,11 @@ assertDeepEqual(
   evaluateWeightInterceptions(5, { ...baseSuggestionChannel, minWeight: 10, maxWeight: 1000 }, { minWeight: true, maxWeight: false }).map((reason) => reason.code),
   ["WEIGHT_TOO_LOW"],
   "enabled min weight interception should block below-min packages"
+);
+assertDeepEqual(
+  evaluateWeightInterceptions(300, { ...baseSuggestionChannel, minWeight: -10, maxWeight: -100 }, { minWeight: true, maxWeight: true }),
+  [],
+  "negative imported weight limits should not make every normal package unavailable"
 );
 assertDeepEqual(
   evaluateVolumetricWeightInterceptions(900, { ...baseSuggestionChannel, maxWeight: 1000 }, { volumetricDivisor: true }),
@@ -391,6 +444,11 @@ assertDeepEqual(
   "enabled sum dimension limit should block packages above the sum limit"
 );
 assertDeepEqual(
+  evaluateDimensionInterceptions(-100, 100, 100, { ...baseSuggestionChannel, maxLength: 999999, maxWidth: 999999, maxHeight: 999999, maxSumDimension: 150 }, { maxLength: true, maxSumDimension: true }).map((reason) => reason.code),
+  ["SUM_DIMENSION_EXCEEDED"],
+  "negative product dimensions should not reduce the sum dimension check"
+);
+assertDeepEqual(
   detectShippingDimensionLimits(70, 50, 40, { ...baseSuggestionChannel, maxLength: 60, maxWidth: 80, maxHeight: 80, maxSumDimension: 999999 }).map((warning) => warning.type),
   [],
   "dimension warning should compare rotatable package sides instead of raw length field"
@@ -399,6 +457,11 @@ assertDeepEqual(
   detectShippingDimensionLimits(81, 50, 40, { ...baseSuggestionChannel, maxLength: 60, maxWidth: 80, maxHeight: 80, maxSumDimension: 999999 }).map((warning) => warning.type),
   ["longEdge"],
   "dimension warning should still warn when sorted longest side exceeds the largest allowed side"
+);
+assertDeepEqual(
+  detectShippingDimensionLimits(-100, 100, 100, { ...baseSuggestionChannel, maxLength: 999999, maxWidth: 999999, maxHeight: 999999, maxSumDimension: 150 }).map((warning) => warning.type),
+  ["sum"],
+  "dimension warning should not let negative dimensions reduce the sum dimension check"
 );
 assertApproxEqual(
   calculateShippingCost(baseSuggestionChannel, 300, 100, 100, 100, 300),
@@ -446,6 +509,16 @@ assertEqual(getCommissionRate(petCarryBagCommission, 1500.01), 14, "1500.01 RUB 
 assertEqual(getCommissionRate(petCarryBagCommission, 5000), 14, "5000 RUB should use second commission tier");
 assertEqual(getCommissionRate(petCarryBagCommission, 5000.000000001), 14, "5000 RUB float noise should still use second commission tier");
 assertEqual(getCommissionRate(petCarryBagCommission, 5000.01), 15, "5000.01 RUB should use third commission tier");
+assertEqual(
+  getCommissionRate({ ...petCarryBagCommission, tiers: [{ min: 0, max: 1500, rate: -5 }] }, 1000),
+  0,
+  "calculation core should clamp negative commission rates to zero"
+);
+assertEqual(
+  getCommissionRate({ ...petCarryBagCommission, tiers: [{ min: 0, max: 1500, rate: 150 }] }, 1000),
+  100,
+  "calculation core should cap commission rates at 100%"
+);
 
 const fallbackSuggestion = calculateSuggestedPrice([baseSuggestionChannel], 12, "RMB");
 assertEqual(fallbackSuggestion.suggestedPriceRMB, 10, "suggested price falls back to logistics threshold without commission");
@@ -671,6 +744,11 @@ assertDeepEqual(
   { fixFee: 2.6, varFeePerGram: 0.035 },
   "shipping rate comma decimal"
 );
+assertDeepEqual(
+  parseShippingRateString("¥-2,6 + ¥-0,035/1g"),
+  { fixFee: 0, varFeePerGram: 0 },
+  "negative shipping rate should clamp to zero"
+);
 
 const commissionHeaders = [
   "一级类目",
@@ -686,6 +764,8 @@ assertDeepEqual(
 );
 assertEqual(parseCommissionPercent("0.12"), 12, "fractional commission percent");
 assertEqual(parseCommissionPercent("14.00%"), 14, "display commission percent");
+assertEqual(parseCommissionPercent("-5%"), 0, "negative commission percent should clamp to zero");
+assertEqual(parseCommissionPercent("150%"), 100, "commission percent above 100 should cap at 100");
 
 const commissionRows = [
   commissionHeaders,
@@ -716,6 +796,16 @@ assertDeepEqual(
     },
   },
   "commission template parsing"
+);
+const malformedCommissionRows = [
+  commissionHeaders,
+  ["异常一级", "异常二级", "-5%", "150%", "Infinity"],
+];
+const malformedCommission = parseCommissionRows(malformedCommissionRows)[0];
+assertDeepEqual(
+  malformedCommission.tiers.map((tier) => tier.rate),
+  [0, 100, 0],
+  "malformed commission rates should be clamped before entering tiers"
 );
 
 const officialCommissionPath = "E:\\Download\\Microsoft Edgedownload\\Tarifs_CN_01_12_2025_1761720496 (1).xlsx";
@@ -791,6 +881,24 @@ const incompleteBatch = parseBatchInput([
 ].join("\n"));
 assertEqual(incompleteBatch.rows.length, 1, "incomplete batch row should still be visible for diagnostics");
 assertEqual(incompleteBatch.errors.length, 1, "incomplete batch row should report missing core fields");
+const malformedBatch = parseBatchInput([
+  "SKU,一级类目,二级类目,长度,宽度,高度,重量,采购成本,前台售价",
+  "BAD1,电子产品,手机配件,-10,-20,Infinity,-300,-5,-100",
+].join("\n"));
+assertEqual(malformedBatch.rows[0].length, 0, "batch parser should clamp negative length to zero");
+assertEqual(malformedBatch.rows[0].width, 0, "batch parser should clamp negative width to zero");
+assertEqual(malformedBatch.rows[0].height, 0, "batch parser should clamp infinite height to zero");
+assertEqual(malformedBatch.rows[0].weight, 0, "batch parser should clamp negative weight to zero");
+assertEqual(malformedBatch.rows[0].purchaseCost, 0, "batch parser should clamp negative purchase cost to zero");
+assertEqual(malformedBatch.rows[0].targetPriceRMB, 0, "batch parser should clamp negative target price to zero");
+assertEqual(malformedBatch.errors.some((error) => error.includes("目标售价") && error.includes("重量")), true, "malformed batch row should report clamped core fields");
+const localizedBatch = parseBatchInput([
+  "SKU,一级类目,二级类目,长度,宽度,高度,重量,采购成本,前台售价",
+  "NUM1,电子产品,手机配件,30,20,10,\"1,234.56\",\"1 234,56\",\"2.345,67\"",
+].join("\n"));
+assertApproxEqual(localizedBatch.rows[0].weight || 0, 1234.56, "batch parser should handle comma thousands with dot decimal");
+assertApproxEqual(localizedBatch.rows[0].purchaseCost || 0, 1234.56, "batch parser should handle space thousands with comma decimal");
+assertApproxEqual(localizedBatch.rows[0].targetPriceRMB || 0, 2345.67, "batch parser should handle dot thousands with comma decimal");
 
 assertCsvRowsAligned(getCommissionTemplateCsv(), "commission template");
 assertCsvRowsAligned(getShippingTemplateCsv(), "shipping template");
@@ -1195,10 +1303,13 @@ assertFirstBudgetWeight(
 
 const alternativeShipping = parseAlternativeShippingRows([
   ["Лого", "Метод", "Рейтинг Ozon", "Сроки доставки", "ПВЗ", "Курьер", "Батарейки"],
-  ["", "Test Standard", "4.8", "2026/5/14", "¥2,6 + ¥0,035/1g", "", "Разрешено", "", "", ""],
+  ["", "Test Standard", "4,8", "2026/5/14", "¥2,6 + ¥0,035/1g", "", "Разрешено", "", "", ""],
 ])[0];
 assertEqual(alternativeShipping.deliveryTimeMin, 5, "alternative shipping date min");
 assertEqual(alternativeShipping.deliveryTimeMax, 14, "alternative shipping date max");
+assertApproxEqual(alternativeShipping.ozonRating, 4.8, "alternative shipping rating should preserve comma decimal");
+assertApproxEqual(normalizeOzonRating("4,8"), 4.8, "shared Ozon rating parser should preserve comma decimal");
+assertApproxEqual(normalizeOzonRating("-4,8"), 0, "shared Ozon rating parser should clamp negative rating");
 assertDeepEqual(
   {
     fixFee: alternativeShipping.fixFee,
@@ -1208,6 +1319,37 @@ assertDeepEqual(
   },
   { fixFee: 2.6, varFeePerGram: 0.035 },
   "alternative shipping should not create fake value limits"
+);
+const malformedAlternativeShipping = parseAlternativeShippingRows([
+  ["Лого", "Метод", "Рейтинг Ozon", "Сроки доставки", "ПВЗ", "Курьер", "Батарейки"],
+  ["", "Bad Standard", "-4.8", "bad", "¥-2,6 + ¥-0,035/1g", "", "", "", "", ""],
+])[0];
+assertDeepEqual(
+  {
+    fixFee: malformedAlternativeShipping.fixFee,
+    varFeePerGram: malformedAlternativeShipping.varFeePerGram,
+    pricePerKg: malformedAlternativeShipping.pricePerKg,
+    ozonRating: malformedAlternativeShipping.ozonRating,
+  },
+  { fixFee: 0, varFeePerGram: 0, pricePerKg: 0, ozonRating: 0 },
+  "malformed alternative shipping should not emit negative fee or rating"
+);
+
+const malformedStructuredShipping = createShippingChannel(
+  ["-5", "-0.02", "-60", "-300", "-10", "-4.8"],
+  { fixFee: 0, varFeePerGram: 1, maxLength: 2, maxWeight: 3, maxValue: 4, ozonRating: 5 }
+);
+assertDeepEqual(
+  {
+    fixFee: malformedStructuredShipping.fixFee,
+    varFeePerGram: malformedStructuredShipping.varFeePerGram,
+    maxLength: malformedStructuredShipping.maxLength,
+    maxWeight: malformedStructuredShipping.maxWeight,
+    maxValue: malformedStructuredShipping.maxValue,
+    ozonRating: malformedStructuredShipping.ozonRating,
+  },
+  { fixFee: 0, varFeePerGram: 0, maxLength: 0, maxWeight: 0, maxValue: 0, ozonRating: 0 },
+  "structured shipping parser should clamp negative numeric fields"
 );
 
 console.log("Parser verification passed.");

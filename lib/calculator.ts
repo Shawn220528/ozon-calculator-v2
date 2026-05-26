@@ -86,7 +86,7 @@ export function getCommissionRate(
   priceRUB: number,
   fulfillmentMode: FulfillmentMode = "RFBS"
 ): number {
-  return getCommissionTierForPrice(commission, priceRUB, fulfillmentMode).rate;
+  return normalizePercent(getCommissionTierForPrice(commission, priceRUB, fulfillmentMode).rate);
 }
 
 export function getCommissionTiersForMode(
@@ -1336,7 +1336,10 @@ export function detectShippingDimensionLimits(
   if (!shippingChannel) return warnings;
   
   // 包裹可以旋转，尺寸预警必须和物流拦截一样按三边排序后比较。
-  const productDims = [length, width, height].filter((value) => value > 0).sort((a, b) => b - a);
+  const safeLength = normalizeMoney(length);
+  const safeWidth = normalizeMoney(width);
+  const safeHeight = normalizeMoney(height);
+  const productDims = [safeLength, safeWidth, safeHeight].filter((value) => value > 0).sort((a, b) => b - a);
   const channelDims = [
     normalizeShippingLimit(shippingChannel.maxLength),
     normalizeShippingLimit(shippingChannel.maxWidth),
@@ -1392,7 +1395,7 @@ export function detectShippingDimensionLimits(
   }
   
   // 检测边长总和
-  const sumDimension = length + width + height;
+  const sumDimension = safeLength + safeWidth + safeHeight;
   const maxSumDimension = normalizeShippingLimit(shippingChannel.maxSumDimension);
   if (maxSumDimension !== undefined && sumDimension > 0) {
     if (sumDimension >= maxSumDimension * 0.95 && sumDimension <= maxSumDimension) {

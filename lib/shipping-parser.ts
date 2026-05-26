@@ -23,24 +23,16 @@ export function parsePriceRange(str: string | number | null | undefined): { min:
   }
   
   const text = String(str).trim();
-  
-  // 处理连字符分隔的范围
-  const parts = text.split(/[-\s]+/);
-  
-  if (parts.length === 1) {
-    // 只有一个值的情况（上限）
-    const max = parseEuropeanNumber(parts[0]);
-    return { min: 0, max: max === Infinity ? Infinity : max };
+
+  const rangeMatch = text.match(/(-?\d[\d\s,.]*)\s*[-–—]\s*(-?\d[\d\s,.]*)/);
+  if (rangeMatch) {
+    const first = Math.max(0, parseEuropeanNumber(rangeMatch[1]));
+    const second = Math.max(0, parseEuropeanNumber(rangeMatch[2]));
+    return { min: Math.min(first, second), max: Math.max(first, second) };
   }
-  
-  // 有两个值的情况 (min - max)
-  const min = parseEuropeanNumber(parts[0]);
-  const max = parseEuropeanNumber(parts[1]);
-  
-  return { 
-    min: min === Infinity ? 0 : min, 
-    max: max === Infinity ? Infinity : max 
-  };
+
+  const max = Math.max(0, parseEuropeanNumber(text));
+  return { min: 0, max: max === Infinity ? Infinity : max };
 }
 
 /**
@@ -53,19 +45,23 @@ export function parseDimensions(str: string | number | null | undefined): { maxS
   }
   
   const text = String(str).toLowerCase();
+  const readLimit = (value: string) => {
+    const parsed = parseEuropeanNumber(value);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : Infinity;
+  };
   
   // 匹配尺寸总和模式: "总和 ≤ 90", "sum ≤ 90", "边长总和 90", "≤ 90"
   const sumPatterns = [
-    /(?:总和|sum(?: of )?dimensions?|边长)\s*(?:≤|<|<=|等于)\s*(\d+)/i,
-    /≤\s*(\d+)\s*(?:cm|厘米)?\s*(?:总和|sum)/i,
-    /(\d+)\s*(?:cm|厘米)?\s*(?:总和|sum)/i,
+    /(?:总和|sum(?: of )?dimensions?|边长)\s*(?:≤|<|<=|等于)\s*(-?\d[\d\s,.]*)/i,
+    /≤\s*(-?\d[\d\s,.]*)\s*(?:cm|厘米)?\s*(?:总和|sum)/i,
+    /(-?\d[\d\s,.]*)\s*(?:cm|厘米)?\s*(?:总和|sum)/i,
   ];
   
   // 匹配单边限制模式: "长边 ≤ 60", "max side 60", "最长边 60"
   const sidePatterns = [
-    /(?:长边|单边|max side|longest(?: edge)?)\s*(?:≤|<|<=|等于)\s*(\d+)/i,
-    /≤\s*(\d+)\s*(?:cm|厘米)?\s*(?:长边|单边|边)/i,
-    /(\d+)\s*(?:cm|厘米)?\s*(?:长边|单边|边)/i,
+    /(?:长边|单边|max side|longest(?: edge)?)\s*(?:≤|<|<=|等于)\s*(-?\d[\d\s,.]*)/i,
+    /≤\s*(-?\d[\d\s,.]*)\s*(?:cm|厘米)?\s*(?:长边|单边|边)/i,
+    /(-?\d[\d\s,.]*)\s*(?:cm|厘米)?\s*(?:长边|单边|边)/i,
   ];
   
   let maxSum = Infinity;
@@ -74,7 +70,7 @@ export function parseDimensions(str: string | number | null | undefined): { maxS
   for (const pattern of sumPatterns) {
     const match = text.match(pattern);
     if (match) {
-      maxSum = parseFloat(match[1]);
+      maxSum = readLimit(match[1]);
       break;
     }
   }
@@ -82,16 +78,16 @@ export function parseDimensions(str: string | number | null | undefined): { maxS
   for (const pattern of sidePatterns) {
     const match = text.match(pattern);
     if (match) {
-      maxSide = parseFloat(match[1]);
+      maxSide = readLimit(match[1]);
       break;
     }
   }
   
   // 备用：尝试直接匹配数字（cm结尾或独立数字）
   if (maxSum === Infinity && maxSide === Infinity) {
-    const directMatch = text.match(/(\d+)\s*cm/);
+    const directMatch = text.match(/(-?\d[\d\s,.]*)\s*cm/);
     if (directMatch) {
-      maxSide = parseFloat(directMatch[1]);
+      maxSide = readLimit(directMatch[1]);
     }
   }
   
@@ -110,10 +106,11 @@ export function parseVolumetricDivisor(str: string | number | null | undefined):
   const text = String(str).toLowerCase();
   
   // 匹配除数模式: "÷ 12000", "/ 12000", "÷12000", "/12000"
-  const match = text.match(/[÷/]\s*(\d[\d\s,]*)/);
+  const match = text.match(/[÷/]\s*(-?\d[\d\s,.]*)/);
   
   if (match) {
-    return parseEuropeanNumber(match[1]);
+    const divisor = parseEuropeanNumber(match[1]);
+    return Number.isFinite(divisor) && divisor > 0 ? divisor : Infinity;
   }
   
   return Infinity;
@@ -216,7 +213,7 @@ export function createShippingChannel(
   const getNumber = (field: string, defaultValue: number = 0): number => {
     const val = getValue(field);
     const num = parseEuropeanNumber(val);
-    return num === Infinity ? defaultValue : num;
+    return num === Infinity ? defaultValue : Math.max(0, num);
   };
   
   const getBoolean = (field: string, defaultValue: boolean = true): boolean => {

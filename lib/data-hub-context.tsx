@@ -25,7 +25,7 @@ import {
   parseCommissionWorkbookRows,
   selectCommissionSheetName,
 } from "./commission-parsing";
-import { parseAlternativeShippingRows } from "./shipping-alternative-parsing";
+import { normalizeOzonRating, parseAlternativeShippingRows } from "./shipping-alternative-parsing";
 import { isSkippableShippingRow, selectShippingSheetName } from "./shipping-workbook";
 import { parseEuropeanNumber } from "./number-parsing";
 import {
@@ -58,22 +58,25 @@ export function evaluateWeightInterceptions(
   interceptionConfig: Record<string, boolean>
 ): ShippingInterceptionReason[] {
   const reasons: ShippingInterceptionReason[] = [];
+  const safeWeight = Number.isFinite(weight) ? Math.max(0, weight) : 0;
+  const minWeight = normalizePositiveLimit(channel.minWeight);
+  const maxWeight = normalizePositiveLimit(channel.maxWeight);
 
-  if (interceptionConfig.minWeight !== false && weight < channel.minWeight) {
+  if (interceptionConfig.minWeight !== false && minWeight !== undefined && safeWeight < minWeight) {
     reasons.push({
       dimension: "实重",
       code: "WEIGHT_TOO_LOW",
       message: "低于最小起重要求",
-      details: `商品 ${weight}g < 渠道最小 ${channel.minWeight}g`,
+      details: `商品 ${safeWeight}g < 渠道最小 ${minWeight}g`,
     });
   }
 
-  if (interceptionConfig.maxWeight !== false && weight > channel.maxWeight) {
+  if (interceptionConfig.maxWeight !== false && maxWeight !== undefined && safeWeight > maxWeight) {
     reasons.push({
       dimension: "实重",
       code: "WEIGHT_TOO_HIGH",
       message: "超过最大实重限制",
-      details: `商品 ${weight}g > 渠道最大 ${channel.maxWeight}g`,
+      details: `商品 ${safeWeight}g > 渠道最大 ${maxWeight}g`,
     });
   }
 
@@ -86,13 +89,15 @@ export function evaluateVolumetricWeightInterceptions(
   interceptionConfig: Record<string, boolean>
 ): ShippingInterceptionReason[] {
   if (interceptionConfig.volumetricDivisor === false) return [];
-  if (volumetricWeight <= channel.maxWeight) return [];
+  const safeVolumetricWeight = Number.isFinite(volumetricWeight) ? Math.max(0, volumetricWeight) : 0;
+  const maxWeight = normalizePositiveLimit(channel.maxWeight);
+  if (maxWeight === undefined || safeVolumetricWeight <= maxWeight) return [];
 
   return [{
     dimension: "体积重",
     code: "VOLUMETRIC_WEIGHT_TOO_HIGH",
     message: "超过最大体积重限制",
-    details: `体积重 ${volumetricWeight.toFixed(0)}g > 渠道最大 ${channel.maxWeight}g`,
+    details: `体积重 ${safeVolumetricWeight.toFixed(0)}g > 渠道最大 ${maxWeight}g`,
   }];
 }
 
@@ -100,6 +105,20 @@ function normalizePositiveLimit(value: number | undefined): number | undefined {
   return value !== undefined && value !== null && Number.isFinite(value) && value > 0 && value < 999999
     ? value
     : undefined;
+}
+
+function normalizeMinWeight(value: number): number {
+  const normalized = normalizePositiveLimit(value);
+  return normalized ?? 0;
+}
+
+function normalizeMaxWeight(value: number): number {
+  const normalized = normalizePositiveLimit(value);
+  return normalized ?? 999999;
+}
+
+function normalizeNonNegativeMoney(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 export function evaluateDimensionInterceptions(
@@ -110,7 +129,10 @@ export function evaluateDimensionInterceptions(
   interceptionConfig: Record<string, boolean>
 ): ShippingInterceptionReason[] {
   const reasons: ShippingInterceptionReason[] = [];
-  const productDims = [length, width, height].sort((a, b) => b - a);
+  const safeLength = Number.isFinite(length) ? Math.max(0, length) : 0;
+  const safeWidth = Number.isFinite(width) ? Math.max(0, width) : 0;
+  const safeHeight = Number.isFinite(height) ? Math.max(0, height) : 0;
+  const productDims = [safeLength, safeWidth, safeHeight].sort((a, b) => b - a);
   const [pLongest, pMiddle, pShortest] = productDims;
   const channelDims = [
     normalizePositiveLimit(channel.maxLength),
@@ -138,7 +160,7 @@ export function evaluateDimensionInterceptions(
   }
 
   const maxSumDimension = normalizePositiveLimit(channel.maxSumDimension);
-  const sumDim = length + width + height;
+  const sumDim = safeLength + safeWidth + safeHeight;
   if (interceptionConfig.maxSumDimension !== false && maxSumDimension !== undefined && sumDim > maxSumDimension) {
     reasons.push({
       dimension: "尺寸总和",
@@ -161,14 +183,14 @@ export function evaluateValueInterceptions(
     currency: "RMB" as const,
     min: normalizeLimitValue(channel.minValue),
     max: normalizeLimitValue(channel.maxValue),
-    price: priceRMB,
+    price: normalizeNonNegativeMoney(priceRMB),
     symbol: "¥",
   };
   const rubLimit = {
     currency: "RUB" as const,
     min: normalizeLimitValue(channel.minValueRUB),
     max: normalizeLimitValue(channel.maxValueRUB),
-    price: priceRUB,
+    price: normalizeNonNegativeMoney(priceRUB),
     symbol: "₽",
   };
   const preferredLimit = valueLimitCurrency === "RMB" ? rmbLimit : rubLimit;
@@ -875,8 +897,8 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
             const valRMB = parseValueRange(valRMBStr);
 
             // 🔴 修复：使用 parseEuropeanNumber 替代 parseFloat，正确处理 "30,000" 和 "30 000" 等格式
-            const minW = fieldMapping.minWeight >= 0 ? parseEuropeanNumber(row[fieldMapping.minWeight]) || 0 : 0;
-            const maxW = fieldMapping.maxWeight >= 0 ? parseEuropeanNumber(row[fieldMapping.maxWeight]) || 999999 : 999999;
+            const minW = fieldMapping.minWeight >= 0 ? normalizeMinWeight(parseEuropeanNumber(row[fieldMapping.minWeight])) : 0;
+            const maxW = fieldMapping.maxWeight >= 0 ? normalizeMaxWeight(parseEuropeanNumber(row[fieldMapping.maxWeight])) : 999999;
 
             const batteryAllowed = fieldMapping.battery >= 0 ? row[fieldMapping.battery]?.includes("允许") || row[fieldMapping.battery]?.toLowerCase().includes("allow") || row[fieldMapping.battery]?.includes("Разрешено") : false;
             const liquidAllowed = fieldMapping.liquid >= 0 ? row[fieldMapping.liquid]?.includes("允许") || row[fieldMapping.liquid]?.toLowerCase().includes("allow") || row[fieldMapping.liquid]?.includes("Разрешено") : false;
@@ -914,7 +936,7 @@ export function DataHubProvider({ children }: { children: React.ReactNode }) {
               maxValue: valRMB.hasLimit ? valRMB.max : undefined,
               billingType,
               volumetricDivisor: volDivisor,  // 🔴 关键修复：从CSV解析除数
-              ozonRating: fieldMapping.rating >= 0 ? parseFloat(row[fieldMapping.rating]) || 0 : 0,
+              ozonRating: fieldMapping.rating >= 0 ? normalizeOzonRating(row[fieldMapping.rating]) : 0,
               batteryAllowed,
               liquidAllowed,
             });

@@ -3,6 +3,8 @@
  * 实现模糊表头匹配、语义预判和数据校验
  */
 
+import { parseEuropeanNumber } from "./number-parsing";
+
 // 🔴 生产环境静默日志
 const isDev = typeof process !== "undefined" && process.env.NODE_ENV === 'development';
 const devLog = isDev ? console.log : () => {};
@@ -631,39 +633,43 @@ export interface SizeConstraints {
  */
 export function parseSizeConstraints(text: string): SizeConstraints {
   const normalizedText = text.replace(/\s+/g, ' ').trim();
+  const readLimit = (value: string): number => {
+    const parsed = parseEuropeanNumber(value);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  };
   
   // 提取边长总和限制
   const sumPatterns = [
-    /边长总和\s*[≤<=]\s*(\d+)/i,
-    /尺寸总和\s*[≤<=]\s*(\d+)/i,
-    /三边总和\s*[≤<=]\s*(\d+)/i,
-    /sum\s*[≤<=]\s*(\d+)/i,
-    /总尺寸\s*[≤<=]\s*(\d+)/i,
+    /边长总和\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /尺寸总和\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /三边总和\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /sum\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /总尺寸\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
   ];
   
   let maxSum: number | null = null;
   for (const pattern of sumPatterns) {
     const match = normalizedText.match(pattern);
     if (match) {
-      maxSum = parseInt(match[1], 10);
+      maxSum = readLimit(match[1]);
       break;
     }
   }
   
   // 提取长边限制
   const edgePatterns = [
-    /长边\s*[≤<=]\s*(\d+)/i,
-    /最长边\s*[≤<=]\s*(\d+)/i,
-    /最大边\s*[≤<=]\s*(\d+)/i,
-    /max\s*length\s*[≤<=]\s*(\d+)/i,
-    /长度\s*[≤<=]\s*(\d+)/i,
+    /长边\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /最长边\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /最大边\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /max\s*length\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
+    /长度\s*[≤<=]\s*(-?\d+(?:[,.]\d+)?)/i,
   ];
   
   let maxLongEdge: number | null = null;
   for (const pattern of edgePatterns) {
     const match = normalizedText.match(pattern);
     if (match) {
-      maxLongEdge = parseInt(match[1], 10);
+      maxLongEdge = readLimit(match[1]);
       break;
     }
   }
@@ -694,12 +700,15 @@ export function validateSizeConstraints(
   constraints: SizeConstraints
 ): { isValid: boolean; errors: string[] } {
   const errors: string[] = [];
+  const safeLength = Number.isFinite(length) ? Math.max(0, length) : 0;
+  const safeWidth = Number.isFinite(width) ? Math.max(0, width) : 0;
+  const safeHeight = Number.isFinite(height) ? Math.max(0, height) : 0;
   
   // 计算边长总和
-  const sum = length + width + height;
+  const sum = safeLength + safeWidth + safeHeight;
   
   // 找出长边
-  const longEdge = Math.max(length, width, height);
+  const longEdge = Math.max(safeLength, safeWidth, safeHeight);
   
   // 检查边长总和限制
   if (constraints.maxSum !== null && sum > constraints.maxSum) {
