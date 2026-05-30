@@ -401,14 +401,13 @@ export default function Home() {
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   
   // 🔹 诊断通栏折叠状态（持久化）
-  const [diagnosticBarCollapsed, setDiagnosticBarCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
+  const [diagnosticBarCollapsed, setDiagnosticBarCollapsed] = useState(false);
+  useEffect(() => {
     try {
-      return localStorage.getItem("diagnostic-bar-collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
+      const saved = localStorage.getItem("diagnostic-bar-collapsed");
+      if (saved === "true") setDiagnosticBarCollapsed(true);
+    } catch { /* 忽略 */ }
+  }, []);
   useEffect(() => {
     localStorage.setItem("diagnostic-bar-collapsed", String(diagnosticBarCollapsed));
   }, [diagnosticBarCollapsed]);

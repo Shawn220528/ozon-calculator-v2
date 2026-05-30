@@ -140,15 +140,13 @@ export function Dashboard({
     [input.exchangeRateBuffer, input.targetPriceRMB]
   );
   const [advisorExpanded, setAdvisorExpanded] = useState(true);
-  const [chartsExpanded, setChartsExpanded] = useState(() => {
-    if (typeof window === "undefined") return false;
+  const [chartsExpanded, setChartsExpanded] = useState(false);
+  useEffect(() => {
     try {
       const saved = localStorage.getItem("dashboard-charts-expanded");
-      return saved === "true";
-    } catch {
-      return false;
-    }
-  });
+      if (saved === "true") setChartsExpanded(true);
+    } catch { /* 忽略 */ }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("dashboard-charts-expanded", String(chartsExpanded));

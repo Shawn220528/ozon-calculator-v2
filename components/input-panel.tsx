@@ -261,15 +261,12 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     if (tokens.length === 0) return [];
 
     const results: CategorySearchResult[] = [];
-    const pushResult = (result: CategorySearchResult) => {
-      if (results.length < 20) results.push(result);
-    };
 
     categories.forEach((cat) => {
       const primaryNorm = normalizeCategorySearchText(cat.primary);
       if (matchesAllTokens(primaryNorm, tokens)) {
         const firstSecondary = cat.secondary[0];
-        pushResult({
+        results.push({
           id: `primary:${cat.primary}`,
           level: "一级",
           matchedLevel: "一级",
@@ -286,7 +283,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         // 匹配条件：所有 token 都在二级类目中，或所有 token 分散在一级+二级中
         const secPathNorm = primaryNorm + secNorm;
         if (matchesAllTokens(secNorm, tokens) || matchesAllTokens(secPathNorm, tokens)) {
-          pushResult({
+          results.push({
             id: `secondary:${cat.primary}:${sec.name}`,
             level: "二级",
             matchedLevel: "二级",
@@ -303,7 +300,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
           const terPathNorm = primaryNorm + secNorm + terNorm;
           // 匹配条件：所有 token 都在三级类目中，或分散在完整路径中
           if (matchesAllTokens(terNorm, tokens) || matchesAllTokens(terPathNorm, tokens)) {
-            pushResult({
+            results.push({
               id: `tertiary:${cat.primary}:${sec.name}:${ter}`,
               level: "三级",
               matchedLevel: "三级",
@@ -337,15 +334,15 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     }, 0);
   };
 
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
-    if (typeof window === "undefined") return { product: true, cost: true, ads: true, pricing: true };
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({ product: true, cost: true, ads: true, pricing: true });
+
+  // 🔹 挂载后从 localStorage 恢复折叠状态（避免 SSR 水合不匹配）
+  useEffect(() => {
     try {
       const saved = localStorage.getItem("input-panel-sections");
-      return saved ? JSON.parse(saved) : { product: true, cost: true, ads: true, pricing: true };
-    } catch {
-      return { product: true, cost: true, ads: true, pricing: true };
-    }
-  });
+      if (saved) setOpenSections(JSON.parse(saved));
+    } catch { /* 忽略解析错误 */ }
+  }, []);
 
   // 🔹 持久化折叠状态
   useEffect(() => {
