@@ -117,6 +117,20 @@ function normalizeCategorySearchText(value: string): string {
   return value.toLowerCase().replace(/\s+/g, "");
 }
 
+/** 将搜索词按空格拆分为多个 token，每个 token 独立归一化（去空格、小写） */
+function tokenizeCategorySearch(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.replace(/\s+/g, ""))
+    .filter(Boolean);
+}
+
+/** 判断归一化后的文本是否匹配所有 token（AND 逻辑） */
+function matchesAllTokens(normalizedText: string, tokens: string[]): boolean {
+  return tokens.every((token) => normalizedText.includes(token));
+}
+
 function numberInputValue(value: number | null | undefined): number | "" {
   return value === null || value === undefined || Number.isNaN(value) ? "" : value;
 }
@@ -243,8 +257,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
   };
 
   const categorySearchResults = useMemo<CategorySearchResult[]>(() => {
-    const query = normalizeCategorySearchText(categorySearch.trim());
-    if (!query) return [];
+    const tokens = tokenizeCategorySearch(categorySearch.trim());
+    if (tokens.length === 0) return [];
 
     const results: CategorySearchResult[] = [];
     const pushResult = (result: CategorySearchResult) => {
@@ -252,7 +266,8 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
     };
 
     categories.forEach((cat) => {
-      if (normalizeCategorySearchText(cat.primary).includes(query)) {
+      const primaryNorm = normalizeCategorySearchText(cat.primary);
+      if (matchesAllTokens(primaryNorm, tokens)) {
         const firstSecondary = cat.secondary[0];
         pushResult({
           id: `primary:${cat.primary}`,
@@ -267,7 +282,10 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
       }
 
       cat.secondary.forEach((sec) => {
-        if (normalizeCategorySearchText(sec.name).includes(query)) {
+        const secNorm = normalizeCategorySearchText(sec.name);
+        // 匹配条件：所有 token 都在二级类目中，或所有 token 分散在一级+二级中
+        const secPathNorm = primaryNorm + secNorm;
+        if (matchesAllTokens(secNorm, tokens) || matchesAllTokens(secPathNorm, tokens)) {
           pushResult({
             id: `secondary:${cat.primary}:${sec.name}`,
             level: "二级",
@@ -281,7 +299,10 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
         }
 
         sec.tertiary.forEach((ter) => {
-          if (normalizeCategorySearchText(ter).includes(query)) {
+          const terNorm = normalizeCategorySearchText(ter);
+          const terPathNorm = primaryNorm + secNorm + terNorm;
+          // 匹配条件：所有 token 都在三级类目中，或分散在完整路径中
+          if (matchesAllTokens(terNorm, tokens) || matchesAllTokens(terPathNorm, tokens)) {
             pushResult({
               id: `tertiary:${cat.primary}:${sec.name}:${ter}`,
               level: "三级",
@@ -367,7 +388,7 @@ export function InputPanel({ input, onInputChange, rivalPrice, rivalCurrency = '
               onFocus={() => setCategorySearchFocused(true)}
               onBlur={() => setCategorySearchFocused(false)}
               className="h-8 text-sm"
-              placeholder="搜索一级 / 二级 / 三级类目"
+              placeholder="搜索类目（多词用空格分隔）"
               autoComplete="off"
             />
             {showCategorySearchResults && (
